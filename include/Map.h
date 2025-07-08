@@ -6,7 +6,10 @@
 #include <cstdint>
 
 struct Cell {
-    enum Type { Empty, Walkable } type{Empty};
+    enum Type { Empty, Walkable, DoorClosed, DoorOpen } type{Empty};
+    static bool isWalkable(Type t) {
+        return t == Walkable || t == DoorOpen;
+    }
 };
 
 struct Point {

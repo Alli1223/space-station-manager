@@ -7,6 +7,8 @@ GameMap::GameMap() {
             set(x, y, Cell::Walkable);
         }
     }
+    // Example door
+    set(5, 5, Cell::DoorClosed);
 }
 
 const Cell& GameMap::get(int x, int y) const {

@@ -15,3 +15,10 @@ make
 ```
 
 This produces two executables, `server` and `client`.
+
+## Controls
+
+Run `server` and then `client`. In the client window use:
+
+- `W`, `A`, `S`, `D` to move your character around the 20x20 station.
+- `E` to toggle doors when standing next to them.
