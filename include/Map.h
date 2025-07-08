@@ -4,11 +4,29 @@
 #include <unordered_map>
 #include <vector>
 #include <cstdint>
+#include <string>
 
 struct Cell {
-    enum Type { Empty, Walkable, DoorClosed, DoorOpen } type{Empty};
+    enum Type { Empty, Walkable, Wall, DoorClosed, DoorOpen } type{Empty};
     static bool isWalkable(Type t) {
         return t == Walkable || t == DoorOpen;
+    }
+    static const char* toString(Type t) {
+        switch (t) {
+            case Empty: return "empty";
+            case Walkable: return "walkable";
+            case Wall: return "wall";
+            case DoorClosed: return "door_closed";
+            case DoorOpen: return "door_open";
+        }
+        return "empty"; // fallback
+    }
+    static Type fromString(const std::string& s) {
+        if (s == "walkable") return Walkable;
+        if (s == "wall") return Wall;
+        if (s == "door_closed") return DoorClosed;
+        if (s == "door_open") return DoorOpen;
+        return Empty;
     }
 };
 

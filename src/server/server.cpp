@@ -9,39 +9,56 @@ using boost::asio::ip::tcp;
 struct Player {
     int x = 10;
     int y = 10;
+    bool edit = false;
 };
 
 std::string handle_command(char cmd, Player& player, GameMap& map) {
     int nx = player.x;
     int ny = player.y;
-    bool doorChanged = false;
-    int doorX = 0, doorY = 0;
-    Cell::Type doorState = Cell::DoorClosed;
-    if (cmd == 'W') ny -= 1;
-    else if (cmd == 'S') ny += 1;
-    else if (cmd == 'A') nx -= 1;
-    else if (cmd == 'D') nx += 1;
-    else if (cmd == 'E') {
+    bool changed = false;
+    int cx = 0, cy = 0; // changed cell coords
+    Cell::Type newState = Cell::Empty;
+
+    if (cmd == 'P') {
+        player.edit = !player.edit;
+    } else if (cmd == 'W') {
+        ny -= 1;
+    } else if (cmd == 'S') {
+        ny += 1;
+    } else if (cmd == 'A') {
+        nx -= 1;
+    } else if (cmd == 'D') {
+        nx += 1;
+    } else if (cmd == 'E' && !player.edit) {
         Point dirs[4] = { {player.x+1, player.y}, {player.x-1, player.y},
                            {player.x, player.y+1}, {player.x, player.y-1} };
         for (auto& p : dirs) {
             auto cell = map.get(p.x, p.y).type;
             if (cell == Cell::DoorClosed) {
                 map.set(p.x, p.y, Cell::DoorOpen);
-                doorChanged = true; doorX = p.x; doorY = p.y; doorState = Cell::DoorOpen; break;
+                changed = true; cx = p.x; cy = p.y; newState = Cell::DoorOpen; break;
             } else if (cell == Cell::DoorOpen) {
                 map.set(p.x, p.y, Cell::DoorClosed);
-                doorChanged = true; doorX = p.x; doorY = p.y; doorState = Cell::DoorClosed; break;
+                changed = true; cx = p.x; cy = p.y; newState = Cell::DoorClosed; break;
             }
         }
+    } else if (player.edit && (cmd == 'B' || cmd == 'V' || cmd == 'N')) {
+        Cell::Type t = Cell::Walkable;
+        if (cmd == 'B') t = Cell::Wall;
+        else if (cmd == 'N') t = Cell::DoorClosed;
+        else if (cmd == 'V') t = Cell::Walkable;
+        map.set(player.x, player.y, t);
+        changed = true; cx = player.x; cy = player.y; newState = t;
     }
-    if (Cell::isWalkable(map.get(nx, ny).type)) {
+
+    if (player.edit || Cell::isWalkable(map.get(nx, ny).type)) {
         player.x = nx; player.y = ny;
     }
+
     std::ostringstream oss;
     oss << "POS " << player.x << ' ' << player.y;
-    if (doorChanged) {
-        oss << " DOOR " << doorX << ' ' << doorY << ' ' << (doorState == Cell::DoorOpen ? "open" : "closed");
+    if (changed) {
+        oss << " SET " << cx << ' ' << cy << ' ' << Cell::toString(newState);
     }
     oss << '\n';
     return oss.str();

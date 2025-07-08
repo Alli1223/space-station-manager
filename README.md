@@ -4,7 +4,8 @@ This repository contains a prototype framework for a 2D top-down game using an a
 
 * **Server** – implemented with `boost::asio` to handle clients and maintain the world state.
 * **Client** – uses OpenGL through GLFW and GLEW for rendering.
-* **Map** – infinite grid of cells. The starting area is a 20x20 walkable space station surrounded by empty space.
+* **Map** – infinite grid of cells. The starting area is a 20x20 space station
+  enclosed by impassable walls with empty space outside.
 
 ## Building
 
@@ -20,5 +21,7 @@ This produces two executables, `server` and `client`.
 
 Run `server` and then `client`. In the client window use:
 
-- `W`, `A`, `S`, `D` to move your character around the 20x20 station.
-- `E` to toggle doors when standing next to them.
+- `W`, `A`, `S`, `D` to move your character.
+- `E` to toggle doors when next to them.
+- `P` to toggle Station Edit mode.
+- When editing: `B` places a wall, `V` places floor, `N` places a closed door at your position.

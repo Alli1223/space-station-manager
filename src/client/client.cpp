@@ -29,6 +29,9 @@ bool sendCommand(char cmd, tcp::socket& socket, int& px, int& py, GameMap& map) 
     while (is >> token) {
         if (token == "POS") {
             is >> px >> py;
+        } else if (token == "SET") {
+            int x,y; std::string state; is >> x >> y >> state;
+            map.set(x,y, Cell::fromString(state));
         } else if (token == "DOOR") {
             int x,y; std::string state; is >> x >> y >> state;
             map.set(x,y, state=="open" ? Cell::DoorOpen : Cell::DoorClosed);
@@ -63,10 +66,11 @@ int main() {
 
     GameMap localMap; // start with same map
     int playerX = 10, playerY = 10;
+    bool editing = false;
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
-    glOrtho(0, 20, 20, 0, -1, 1);
+    glOrtho(0, 40, 40, 0, -1, 1);
     glMatrixMode(GL_MODELVIEW);
 
     while (!glfwWindowShouldClose(window)) {
@@ -74,17 +78,28 @@ int main() {
 
         float size = 1.0f;
         // handle input
+        if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
+            if (sendCommand('P', socket, playerX, playerY, localMap)) editing = !editing;
+        }
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) sendCommand('W', socket, playerX, playerY, localMap);
         if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) sendCommand('S', socket, playerX, playerY, localMap);
         if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) sendCommand('A', socket, playerX, playerY, localMap);
         if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) sendCommand('D', socket, playerX, playerY, localMap);
         if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) sendCommand('E', socket, playerX, playerY, localMap);
+        if (editing) {
+            if (glfwGetKey(window, GLFW_KEY_B) == GLFW_PRESS) sendCommand('B', socket, playerX, playerY, localMap);
+            if (glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS) sendCommand('V', socket, playerX, playerY, localMap);
+            if (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) sendCommand('N', socket, playerX, playerY, localMap);
+        }
 
-        for (int y = 0; y < 20; ++y) {
-            for (int x = 0; x < 20; ++x) {
+        for (int y = 0; y < 40; ++y) {
+            for (int x = 0; x < 40; ++x) {
                 const Cell& c = localMap.get(x,y);
                 if (c.type == Cell::Walkable) {
                     glColor3f(0.0f, 1.0f, 0.0f);
+                    drawQuad(x, y, size);
+                } else if (c.type == Cell::Wall) {
+                    glColor3f(0.3f, 0.3f, 0.3f);
                     drawQuad(x, y, size);
                 } else if (c.type == Cell::DoorClosed) {
                     glColor3f(1.0f, 0.0f, 0.0f);
