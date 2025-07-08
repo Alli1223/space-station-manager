@@ -8,6 +8,15 @@ This repository contains a prototype framework for a 2D top-down game using an a
   enclosed by impassable walls with empty space outside. The server persists the
   current map to `map.txt` so edits are kept between runs.
 
+## Prerequisites
+
+Install the development packages for Boost, GLFW and GLEW on your system. On
+Ubuntu this can be done with:
+
+```bash
+sudo apt-get install libboost-dev libboost-system-dev libglfw3-dev libglew-dev
+```
+
 ## Building
 
 ```bash

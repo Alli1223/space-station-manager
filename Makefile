@@ -11,15 +11,15 @@ build:
 	cd $(BUILD_DIR) && cmake .. && $(MAKE)
 
 run-server: build
-	./$(BUILD_DIR)/server
+	./$(BUILD_DIR)/src/server
 
 run-client: build
-	./$(BUILD_DIR)/client
+	./$(BUILD_DIR)/src/client
 
 run: build
-	./$(BUILD_DIR)/server &
+	./$(BUILD_DIR)/src/server &
 	SERVER_PID=$$!
-	./$(BUILD_DIR)/client
+	./$(BUILD_DIR)/src/client
 	kill $$SERVER_PID
 
 clean:
