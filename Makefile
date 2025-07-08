@@ -2,7 +2,7 @@
 
 BUILD_DIR := build
 
-.PHONY: all build run-client run-server run clean
+.PHONY: all build run-client run-server run clean install-deps
 
 all: build
 
@@ -24,3 +24,11 @@ run: build
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+
+
+install-deps:
+	apt-get update && apt-get install -y \
+		build-essential cmake \
+		libboost-dev libboost-system-dev \
+		libglfw3-dev libglew-dev

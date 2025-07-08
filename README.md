@@ -10,12 +10,16 @@ This repository contains a prototype framework for a 2D top-down game using an a
 
 ## Prerequisites
 
-Install the development packages for Boost, GLFW and GLEW on your system. On
-Ubuntu this can be done with:
+Install the development packages for Boost, GLFW and GLEW on your system. You
+can install everything automatically by running:
 
 ```bash
-sudo apt-get install libboost-dev libboost-system-dev libglfw3-dev libglew-dev
+make install-deps
 ```
+
+The command uses `apt-get` under the hood, so on Ubuntu it will install
+`libboost-dev`, `libboost-system-dev`, `libglfw3-dev`, `libglew-dev` and the
+usual build tools.
 
 ## Building
 
