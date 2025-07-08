@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdint>
 #include <string>
+#include <mutex>
 
 struct Cell {
     enum Type { Empty, Walkable, Wall, DoorClosed, DoorOpen } type{Empty};
@@ -52,8 +53,11 @@ public:
     GameMap();
     const Cell& get(int x, int y) const;
     void set(int x, int y, Cell::Type type);
+    void load(const std::string& path);
+    void save(const std::string& path) const;
 private:
     std::unordered_map<Point, Cell> cells_;
+    mutable std::mutex mutex_;
 };
 
 #endif // MAP_H

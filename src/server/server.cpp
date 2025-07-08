@@ -2,6 +2,7 @@
 #include <iostream>
 #include <thread>
 #include <sstream>
+#include <csignal>
 #include "Map.h"
 
 using boost::asio::ip::tcp;
@@ -12,7 +13,14 @@ struct Player {
     bool edit = false;
 };
 
-std::string handle_command(char cmd, Player& player, GameMap& map) {
+static GameMap g_map;
+
+void handle_sigint(int) {
+    g_map.save("map.txt");
+    std::_Exit(0);
+}
+
+std::string handle_command(char cmd, Player& player) {
     int nx = player.x;
     int ny = player.y;
     bool changed = false;
@@ -33,12 +41,12 @@ std::string handle_command(char cmd, Player& player, GameMap& map) {
         Point dirs[4] = { {player.x+1, player.y}, {player.x-1, player.y},
                            {player.x, player.y+1}, {player.x, player.y-1} };
         for (auto& p : dirs) {
-            auto cell = map.get(p.x, p.y).type;
+            auto cell = g_map.get(p.x, p.y).type;
             if (cell == Cell::DoorClosed) {
-                map.set(p.x, p.y, Cell::DoorOpen);
+                g_map.set(p.x, p.y, Cell::DoorOpen);
                 changed = true; cx = p.x; cy = p.y; newState = Cell::DoorOpen; break;
             } else if (cell == Cell::DoorOpen) {
-                map.set(p.x, p.y, Cell::DoorClosed);
+                g_map.set(p.x, p.y, Cell::DoorClosed);
                 changed = true; cx = p.x; cy = p.y; newState = Cell::DoorClosed; break;
             }
         }
@@ -47,11 +55,11 @@ std::string handle_command(char cmd, Player& player, GameMap& map) {
         if (cmd == 'B') t = Cell::Wall;
         else if (cmd == 'N') t = Cell::DoorClosed;
         else if (cmd == 'V') t = Cell::Walkable;
-        map.set(player.x, player.y, t);
+        g_map.set(player.x, player.y, t);
         changed = true; cx = player.x; cy = player.y; newState = t;
     }
 
-    if (player.edit || Cell::isWalkable(map.get(nx, ny).type)) {
+    if (player.edit || Cell::isWalkable(g_map.get(nx, ny).type)) {
         player.x = nx; player.y = ny;
     }
 
@@ -64,7 +72,7 @@ std::string handle_command(char cmd, Player& player, GameMap& map) {
     return oss.str();
 }
 
-void session(tcp::socket socket, GameMap& map) {
+void session(tcp::socket socket) {
     try {
         Player player;
         for (;;) {
@@ -72,7 +80,7 @@ void session(tcp::socket socket, GameMap& map) {
             boost::system::error_code ec;
             size_t n = boost::asio::read(socket, boost::asio::buffer(&c,1), ec);
             if (ec || n == 0) break;
-            std::string response = handle_command(c, player, map);
+            std::string response = handle_command(c, player);
             boost::asio::write(socket, boost::asio::buffer(response), ec);
             if (ec) break;
         }
@@ -83,13 +91,14 @@ void session(tcp::socket socket, GameMap& map) {
 
 int main() {
     try {
+        std::signal(SIGINT, handle_sigint);
+        g_map.load("map.txt");
         boost::asio::io_context io_context;
         tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 12345));
-        GameMap map;
         for (;;) {
             tcp::socket socket(io_context);
             acceptor.accept(socket);
-            std::thread(session, std::move(socket), std::ref(map)).detach();
+            std::thread(session, std::move(socket)).detach();
         }
     } catch (const std::exception& e) {
         std::cerr << "Server exception: " << e.what() << std::endl;
