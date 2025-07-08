@@ -17,6 +17,14 @@ make
 
 This produces two executables, `server` and `client`.
 
+You can also use the provided Makefile:
+
+```bash
+make run-server   # build and run only the server
+make run-client   # build and run only the client
+make run          # start the server in the background and the client in the foreground
+```
+
 ## Controls
 
 Run `server` and then `client`. In the client window use:
