@@ -316,7 +316,10 @@ void Renderer::renderObject(const GameObject* obj) {
         auto* player = static_cast<const Player*>(obj);
         float cx = player->x + player->width / 2.0f;
         float cy = player->y + player->height / 2.0f;
-        drawCircle(cx, cy, player->width / 2.0f, 0.1f, 0.1f, 0.1f); // black dot
+        // Use player's assigned color
+        uint8_t ci = player->colorIndex % 8;
+        drawCircle(cx, cy, player->width / 2.0f,
+                   PLAYER_COLORS[ci][0], PLAYER_COLORS[ci][1], PLAYER_COLORS[ci][2]);
         // Draw a small indicator if carrying cargo
         if (player->isCarrying()) {
             drawCircle(cx, cy - player->height / 2.0f - 4.0f, 4.0f, 1.0f, 1.0f, 0.0f);
@@ -359,7 +362,7 @@ void Renderer::renderObjects(const std::vector<GameObject*>& objects) {
     }
 }
 
-void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject*>& objects) {
+void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject*>& objects, int32_t stationMoney) {
     // Switch to screen-space projection for HUD
     beginScreenSpace();
 
@@ -378,6 +381,37 @@ void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject
                 drawRect(5.0f, 5.0f, 20.0f, 20.0f, cc.r, cc.g, cc.b);
                 break;
             }
+        }
+    }
+
+    // === Money display (top-left, below carrying indicator) ===
+    {
+        float moneyY = 34.0f;
+        // Coin icon (yellow circle approximated as square)
+        drawRect(4.0f, moneyY, 12.0f, 12.0f, 1.0f, 0.85f, 0.2f);
+
+        // Money bar: 1px per 10 money, capped at 200px visual width
+        float barX = 20.0f;
+        float barW = std::min(static_cast<float>(std::abs(stationMoney)) / 10.0f, 200.0f);
+        float barH = 8.0f;
+        float barY = moneyY + 2.0f;
+
+        // Background
+        drawRect(barX, barY, 200.0f, barH, 0.15f, 0.15f, 0.2f, 0.6f);
+
+        // Bar color: green if positive, red if negative
+        if (stationMoney >= 0) {
+            drawRect(barX, barY, barW, barH, 0.2f, 0.8f, 0.3f);
+        } else {
+            drawRect(barX, barY, barW, barH, 0.9f, 0.2f, 0.2f);
+        }
+
+        // Coin pips: one small yellow square per 100 money, up to 10
+        int pips = std::min(std::abs(stationMoney) / 100, 10);
+        for (int i = 0; i < pips; i++) {
+            float pipX = barX + i * 14.0f + 2.0f;
+            float pipY = moneyY + barH + 6.0f;
+            drawRect(pipX, pipY, 10.0f, 6.0f, 1.0f, 0.85f, 0.2f);
         }
     }
 
@@ -510,7 +544,7 @@ void Renderer::renderShipCargo(const Ship* ship) {
 void Renderer::renderObjectivesPanel(const Ship* ship) {
     // Panel on the right side of screen
     float panelW = 120.0f;
-    float panelH = 200.0f;
+    float panelH = 230.0f;
     float panelX = windowWidth - panelW - 10.0f;
     float panelY = 40.0f;
 
@@ -618,6 +652,46 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
         if (full) {
             drawRect(barX, barY, barW, barH, 0.2f, 0.9f, 0.2f, 0.3f);
         }
+        y += iconSize + sectionPad;
+    }
+
+    // === PATIENCE SECTION ===
+    if (ship->state == ShipState::WAITING_RESUPPLY && ship->maxPatience > 0.0f) {
+        // Separator bar
+        drawRect(panelX, y, panelW, 3.0f, 0.6f, 0.6f, 0.65f);
+        y += 8.0f;
+
+        // Patience bar
+        float pct = ship->patienceTimer / ship->maxPatience;
+        if (pct < 0.0f) pct = 0.0f;
+        if (pct > 1.0f) pct = 1.0f;
+
+        float pBarX = panelX + 8.0f;
+        float pBarW = panelW - 16.0f;
+        float pBarH = 10.0f;
+
+        // Color: green -> yellow -> red as patience decreases
+        float pr, pg, pb;
+        if (pct > 0.5f) {
+            pr = 0.3f; pg = 0.9f; pb = 0.3f; // green
+        } else if (pct > 0.25f) {
+            pr = 0.9f; pg = 0.9f; pb = 0.2f; // yellow
+        } else {
+            pr = 0.9f; pg = 0.2f; pb = 0.2f; // red
+        }
+
+        // Flash/pulse when below 25%
+        float alpha = 1.0f;
+        if (pct < 0.25f) {
+            float t = static_cast<float>(glfwGetTime());
+            alpha = 0.5f + 0.5f * std::sin(t * 6.0f); // pulse between 0.5 and 1.0
+            if (alpha < 0.5f) alpha = 0.5f;
+        }
+
+        // Background
+        drawRect(pBarX, y, pBarW, pBarH, 0.2f, 0.2f, 0.2f);
+        // Fill
+        drawRect(pBarX, y, pBarW * pct, pBarH, pr, pg, pb, alpha);
     }
 }
 

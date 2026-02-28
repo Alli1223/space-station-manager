@@ -11,9 +11,12 @@ namespace ssm {
 class ShipManager {
 public:
     using IdGenerator = std::function<uint32_t()>;
+    using MoneyCallback = std::function<void(int32_t delta, bool happy)>;
 
     float spawnInterval = SHIP_SPAWN_INTERVAL;
     float spawnTimer = 0.0f;
+
+    MoneyCallback onMoneyChange;
 
     void init(const std::vector<DockingCollar*>& collars, IdGenerator idGen);
     void update(float dt, std::vector<GameObject*>& allObjects);

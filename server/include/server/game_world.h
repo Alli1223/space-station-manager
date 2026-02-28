@@ -34,6 +34,7 @@ public:
 
     StationMap& getMap() { return map; }
     const std::vector<GameObject*>& getObjects() const { return objects; }
+    int32_t getMoney() const { return stationMoney; }
 
 private:
     StationMap map;
@@ -42,6 +43,7 @@ private:
     std::vector<GameObject*> objects;
     std::unordered_map<uint32_t, Player*> playersByClientIndex;
     uint32_t nextId = 1;
+    int32_t stationMoney = STARTING_MONEY;
 
     uint32_t generateId() { return nextId++; }
 

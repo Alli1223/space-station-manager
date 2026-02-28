@@ -25,7 +25,7 @@ public:
     void renderMap(const StationMap& map);
     void renderObject(const GameObject* obj);
     void renderObjects(const std::vector<GameObject*>& objects);
-    void renderHUD(const Player* localPlayer, const std::vector<GameObject*>& objects);
+    void renderHUD(const Player* localPlayer, const std::vector<GameObject*>& objects, int32_t stationMoney = 0);
 
     // Screen-space rendering for UI
     void beginScreenSpace();

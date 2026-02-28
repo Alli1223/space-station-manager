@@ -81,6 +81,8 @@ void Ship::applyClassStats(ShipClass sc) {
     totalMetal = stats.metalToUnload;
     totalWood = stats.woodToUnload;
     passengers = stats.passengers;
+    maxPatience = stats.patienceTime;
+    patienceTimer = maxPatience;
 }
 
 void Ship::serialize(ByteBuffer& buf) const {
@@ -100,6 +102,8 @@ void Ship::serialize(ByteBuffer& buf) const {
     buf.writeU8(totalMetal);
     buf.writeU8(totalWood);
     buf.writeU8(passengers);
+    buf.writeFloat(patienceTimer);
+    buf.writeFloat(maxPatience);
 }
 void Ship::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
@@ -118,6 +122,8 @@ void Ship::deserialize(ByteBuffer& buf) {
     totalMetal = buf.readU8();
     totalWood = buf.readU8();
     passengers = buf.readU8();
+    patienceTimer = buf.readFloat();
+    maxPatience = buf.readFloat();
 }
 
 // --- Cargo ---
@@ -162,12 +168,14 @@ void Player::serialize(ByteBuffer& buf) const {
     buf.writeString(name);
     buf.writeFloat(speed);
     buf.writeU32(carryingCargoId);
+    buf.writeU8(colorIndex);
 }
 void Player::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
     name = buf.readString();
     speed = buf.readFloat();
     carryingCargoId = buf.readU32();
+    colorIndex = buf.readU8();
 }
 
 } // namespace ssm

@@ -44,6 +44,9 @@ private:
     // Accumulated interact press (persists until sent to server)
     bool pendingInteract = false;
 
+    // Station economy
+    int32_t stationMoney = 0;
+
     void clearGameObjects();
     Player* findLocalPlayer();
     void toggleEditMode();

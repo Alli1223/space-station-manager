@@ -74,6 +74,10 @@ public:
     uint8_t totalMetal = 5;   // original amount (for HUD rendering)
     uint8_t totalWood = 3;    // original amount (for HUD rendering)
     uint8_t passengers = 0;   // stored for future use
+    float patienceTimer = 60.0f;
+    float maxPatience = 60.0f;
+
+    bool isImpatient() const { return patienceTimer <= 0.0f; }
 
     Ship();
     Ship(uint32_t id, float x, float y);
@@ -111,6 +115,7 @@ public:
     float dx = 0.0f; // pending input
     float dy = 0.0f;
     bool interacting = false;
+    uint8_t colorIndex = 0;
 
     Player();
     Player(uint32_t id, float x, float y, const std::string& name);

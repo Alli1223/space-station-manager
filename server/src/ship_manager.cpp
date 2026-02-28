@@ -108,6 +108,10 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
             break;
         }
         case ShipState::WAITING_RESUPPLY: {
+            // Countdown patience timer
+            ship->patienceTimer -= dt;
+
+            // Happy departure: fully resupplied
             if (ship->isResupplied()) {
                 ship->state = ShipState::DEPARTING;
                 ship->stateTimer = 2.0f;
@@ -119,7 +123,54 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
                     collar->dockedShipId = 0;
                 }
 
-                std::cout << "Ship " << ship->id << " departing, airlock sealed" << std::endl;
+                // Calculate payout based on ship class
+                int32_t payout = MEDIUM_SHIP_PAYOUT;
+                switch (ship->shipClass) {
+                    case ShipClass::SMALL:  payout = SMALL_SHIP_PAYOUT; break;
+                    case ShipClass::MEDIUM: payout = MEDIUM_SHIP_PAYOUT; break;
+                    case ShipClass::LARGE:  payout = LARGE_SHIP_PAYOUT; break;
+                }
+                if (onMoneyChange) onMoneyChange(payout, true);
+
+                std::cout << "[SERVER] Ship " << ship->id << " departing HAPPY, payout +" << payout
+                          << ", airlock sealed" << std::endl;
+            }
+            // Angry departure: patience ran out
+            else if (ship->patienceTimer <= 0.0f) {
+                ship->state = ShipState::DEPARTING;
+                ship->stateTimer = 2.0f;
+
+                // Close the airlock door and free the docking collar
+                DockingCollar* collar = findCollar(ship->targetCollarId);
+                if (collar) {
+                    setAirlockState(collar, allObjects, false);
+                    collar->dockedShipId = 0;
+                }
+
+                // Calculate penalty — partial resupply gives scaled payout instead of full penalty
+                float fuelPct = (ship->maxFuel > 0) ? ship->fuel / ship->maxFuel : 1.0f;
+                float foodPct = (ship->maxFood > 0) ? ship->food / ship->maxFood : 1.0f;
+                float resupplyPct = (fuelPct + foodPct) / 2.0f;
+
+                int32_t delta;
+                if (resupplyPct > 0.1f) {
+                    // Partial resupply: scale payout proportionally
+                    int32_t fullPayout = MEDIUM_SHIP_PAYOUT;
+                    switch (ship->shipClass) {
+                        case ShipClass::SMALL:  fullPayout = SMALL_SHIP_PAYOUT; break;
+                        case ShipClass::MEDIUM: fullPayout = MEDIUM_SHIP_PAYOUT; break;
+                        case ShipClass::LARGE:  fullPayout = LARGE_SHIP_PAYOUT; break;
+                    }
+                    delta = static_cast<int32_t>(fullPayout * resupplyPct * 0.5f);
+                    if (delta < 1) delta = 0;
+                } else {
+                    // Nearly nothing supplied — full penalty
+                    delta = ANGRY_DEPART_PENALTY;
+                }
+                if (onMoneyChange) onMoneyChange(delta, false);
+
+                std::cout << "[SERVER] Ship " << ship->id << " departing ANGRY (patience expired), delta "
+                          << delta << ", airlock sealed" << std::endl;
             }
             break;
         }

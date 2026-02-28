@@ -30,11 +30,13 @@ public:
     using StateCallback = std::function<void(const std::vector<GameObject*>& objects)>;
     using EventCallback = std::function<void(EventType event, uint32_t objectId)>;
     using MapUpdateCallback = std::function<void(int16_t gridX, int16_t gridY, CellType cellType)>;
+    using StationStateCallback = std::function<void(int32_t money)>;
 
     WelcomeCallback onWelcome;
     StateCallback onState;
     EventCallback onEvent;
     MapUpdateCallback onMapUpdate;
+    StationStateCallback onStationState;
 
     bool connect(const std::string& host, uint16_t port);
     void disconnect();

@@ -137,6 +137,11 @@ void NetworkClient::processMessages() {
                 if (onMapUpdate) onMapUpdate(gx, gy, ct);
                 break;
             }
+            case MessageType::MSG_STATION_STATE: {
+                int32_t money = static_cast<int32_t>(payload.readU32());
+                if (onStationState) onStationState(money);
+                break;
+            }
             default:
                 break;
         }

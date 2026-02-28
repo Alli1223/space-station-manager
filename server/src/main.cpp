@@ -107,6 +107,11 @@ int main(int argc, char* argv[]) {
         if (timeSinceBroadcast >= ssm::SERVER_TICK_INTERVAL) {
             auto state = world.buildStateSnapshot();
             network.broadcast(ssm::MessageType::MSG_STATE, state);
+
+            // Also broadcast station economy state
+            auto stationState = ssm::buildStationStateMessage(world.getMoney());
+            network.broadcast(ssm::MessageType::MSG_STATION_STATE, stationState);
+
             lastBroadcast = now;
         }
 

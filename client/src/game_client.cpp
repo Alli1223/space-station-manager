@@ -69,6 +69,10 @@ bool GameClient::init(const std::string& host, uint16_t port, const std::string&
         map.setCell(gx, gy, ct);
     };
 
+    network.onStationState = [this](int32_t money) {
+        stationMoney = money;
+    };
+
     if (!network.connect(host, port)) {
         std::cerr << "Failed to connect to server" << std::endl;
         return false;
@@ -257,7 +261,7 @@ void GameClient::run() {
         }
 
         if (localPlayer) {
-            renderer.renderHUD(localPlayer, gameObjects);
+            renderer.renderHUD(localPlayer, gameObjects, stationMoney);
         }
 
         // Render UI on top of everything

@@ -111,4 +111,10 @@ ByteBuffer buildMapUpdateMessage(int16_t gridX, int16_t gridY, CellType cellType
     return buf;
 }
 
+ByteBuffer buildStationStateMessage(int32_t money) {
+    ByteBuffer buf;
+    buf.writeU32(static_cast<uint32_t>(money));
+    return buf;
+}
+
 } // namespace ssm

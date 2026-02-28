@@ -21,6 +21,7 @@ enum class MessageType : uint8_t {
     MSG_EVENT = 12,
     MSG_PLAYER_LEFT = 13,
     MSG_MAP_UPDATE = 14,
+    MSG_STATION_STATE = 15,
 };
 
 enum class EventType : uint8_t {
@@ -29,6 +30,7 @@ enum class EventType : uint8_t {
     DOOR_TOGGLED = 3,
     CARGO_PICKUP = 4,
     CARGO_DROP = 5,
+    SHIP_ANGRY_DEPART = 6,
 };
 
 // Encode a message with length prefix: [uint16 length][uint8 type][payload]
@@ -53,5 +55,6 @@ ByteBuffer buildStateMessage(const std::vector<class GameObject*>& objects);
 ByteBuffer buildEventMessage(EventType event, uint32_t objectId);
 ByteBuffer buildPlayerLeftMessage(uint32_t playerId);
 ByteBuffer buildMapUpdateMessage(int16_t gridX, int16_t gridY, CellType cellType);
+ByteBuffer buildStationStateMessage(int32_t money);
 
 } // namespace ssm

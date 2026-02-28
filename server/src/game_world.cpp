@@ -22,7 +22,16 @@ bool GameWorld::init(const std::string& mapFile) {
     auto collars = findObjectsOfType<DockingCollar>();
     shipManager.init(collars, [this]() { return generateId(); });
 
-    std::cout << "World initialized with " << objects.size() << " objects" << std::endl;
+    // Wire economy callback
+    shipManager.onMoneyChange = [this](int32_t delta, bool happy) {
+        stationMoney += delta;
+        std::cout << "[SERVER] Ship departed (" << (happy ? "happy" : "angry")
+                  << "), money delta: " << (delta >= 0 ? "+" : "") << delta
+                  << ", total: " << stationMoney << std::endl;
+    };
+
+    std::cout << "World initialized with " << objects.size() << " objects, starting money: "
+              << stationMoney << std::endl;
     return true;
 }
 
@@ -134,11 +143,11 @@ void GameWorld::buildMapObjects() {
     for (auto& [sx, sy] : storagePositions) {
         float wx = sx * CELL_SIZE + 4.0f;
         float wy = sy * CELL_SIZE + 4.0f;
-        if (fuelCount < 8) {
+        if (fuelCount < 4) {
             auto* cargo = new Cargo(generateId(), wx, wy, CargoType::FUEL, 1);
             objects.push_back(cargo);
             fuelCount++;
-        } else if (foodCount < 8) {
+        } else if (foodCount < 4) {
             auto* cargo = new Cargo(generateId(), wx, wy, CargoType::FOOD, 1);
             objects.push_back(cargo);
             foodCount++;
@@ -194,11 +203,12 @@ void GameWorld::onPlayerJoin(uint32_t clientIndex, const std::string& name) {
     }
 
     auto* player = new Player(generateId(), spawnX, spawnY, name);
+    player->colorIndex = static_cast<uint8_t>(playersByClientIndex.size() % 8);
     objects.push_back(player);
     playersByClientIndex[clientIndex] = player;
 
-    std::cout << "Player '" << name << "' (id=" << player->id << ") joined at ("
-              << spawnX << ", " << spawnY << ")" << std::endl;
+    std::cout << "Player '" << name << "' (id=" << player->id << ", color=" << static_cast<int>(player->colorIndex)
+              << ") joined at (" << spawnX << ", " << spawnY << ")" << std::endl;
 }
 
 void GameWorld::onPlayerInput(uint32_t clientIndex, float dx, float dy, bool interact) {
