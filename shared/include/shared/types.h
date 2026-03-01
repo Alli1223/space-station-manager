@@ -58,9 +58,11 @@ enum class GameObjectType : uint8_t {
 enum class CargoType : uint8_t {
     NONE = 0,
     METAL,
-    WOOD,
+    ORE,
     FUEL,
     FOOD,
+    CRYSTALS,
+    PLASMA,
 };
 
 enum class DoorState : uint8_t {
@@ -92,15 +94,18 @@ struct ShipClassStats {
     float maxFuel;
     float maxFood;
     uint8_t metalToUnload;
-    uint8_t woodToUnload;
+    uint8_t oreToUnload;
+    uint8_t crystalsToUnload;
+    uint8_t plasmaToUnload;
     uint8_t passengers;
     float patienceTime;
 };
 
 inline const ShipClassStats& getShipClassStats(ShipClass sc) {
-    static const ShipClassStats small  { 48.0f,  72.0f, 70.0f, 1.5f,  60.0f, 30.0f, 3, 2,  2, 90.0f };
-    static const ShipClassStats medium { 64.0f,  96.0f, 50.0f, 2.0f, 100.0f, 50.0f, 5, 3,  5, 70.0f };
-    static const ShipClassStats large  { 96.0f, 128.0f, 30.0f, 3.0f, 160.0f, 80.0f, 8, 5, 10, 50.0f };
+    //                                  w       h      speed  dock   fuel    food   met ore cry pla pass patience
+    static const ShipClassStats small  {  96.0f, 128.0f, 70.0f, 1.5f,  60.0f, 30.0f, 3, 2, 1, 0,  2, 90.0f };
+    static const ShipClassStats medium { 128.0f, 160.0f, 50.0f, 2.0f, 100.0f, 50.0f, 5, 3, 1, 1,  5, 70.0f };
+    static const ShipClassStats large  { 160.0f, 192.0f, 30.0f, 3.0f, 160.0f, 80.0f, 8, 5, 2, 1, 10, 50.0f };
     switch (sc) {
         case ShipClass::SMALL:  return small;
         case ShipClass::MEDIUM: return medium;

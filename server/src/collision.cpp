@@ -129,4 +129,11 @@ bool CollisionSystem::checkShipWallCollision(const std::vector<Ship*>& dockedShi
     return false;
 }
 
+bool CollisionSystem::wouldCargoCollide(const StationMap& map, const std::vector<Door*>& doors,
+                                         float x, float y, float w, float h) const {
+    // Same as wouldCollide but WITHOUT ship wall checks (cargo can be inside ships)
+    return checkGridCollision(map, x, y, w, h) ||
+           checkDoorCollision(doors, x, y, w, h);
+}
+
 } // namespace ssm

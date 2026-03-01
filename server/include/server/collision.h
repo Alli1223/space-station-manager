@@ -18,6 +18,10 @@ public:
                            const std::vector<Ship*>& dockedShips,
                            Player& player, float dx, float dy, float dt);
 
+    // Check if a cargo item would collide with walls/doors (not ship walls — cargo can be inside ships)
+    bool wouldCargoCollide(const StationMap& map, const std::vector<Door*>& doors,
+                           float x, float y, float w, float h) const;
+
 private:
     // Check if a world-space rectangle overlaps any solid grid cell
     bool checkGridCollision(const StationMap& map, float x, float y, float w, float h) const;

@@ -56,6 +56,12 @@ ByteBuffer buildCargoPlaceMessage(float targetX, float targetY) {
     return buf;
 }
 
+ByteBuffer buildTetherToggleMessage(uint32_t cargoId) {
+    ByteBuffer buf;
+    buf.writeU32(cargoId);
+    return buf;
+}
+
 // --- Server -> Client ---
 
 ByteBuffer buildWelcomeMessage(uint32_t playerId, const std::vector<uint8_t>& mapData,

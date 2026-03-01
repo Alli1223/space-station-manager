@@ -156,6 +156,26 @@ void GameClient::run() {
             }
         }
 
+        // Tether toggle: when NOT carrying, NOT in edit mode, left-click on on-ground cargo
+        if (!editMode && !uiConsumed && carryCheckPlayer && !carryCheckPlayer->isCarrying() && mapReceived) {
+            if (input.wasLeftClickPressed()) {
+                float worldX, worldY;
+                screenToWorld(input.getMouseX(), input.getMouseY(), worldX, worldY);
+                // Hit-test all on-ground cargo (same AABB as tooltip hover)
+                for (auto* obj : gameObjects) {
+                    if (obj->type == GameObjectType::CARGO && obj->active) {
+                        auto* cargo = static_cast<const Cargo*>(obj);
+                        if (!cargo->isOnGround()) continue;
+                        if (worldX >= cargo->x && worldX <= cargo->x + cargo->width &&
+                            worldY >= cargo->y && worldY <= cargo->y + cargo->height) {
+                            network.sendTetherToggle(cargo->id);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         // Accumulate interact presses between network ticks so they aren't lost
         if (input.wasInteractPressed()) {
             pendingInteract = true;
@@ -202,6 +222,26 @@ void GameClient::run() {
         }
 
         renderer.renderObjects(gameObjects);
+        renderer.renderTetherRopes(gameObjects);
+
+        // Hover tooltip: check if mouse is over an on-ground cargo item
+        CargoType hoveredCargoType = CargoType::NONE;
+        if (!editMode && mapReceived) {
+            float hoverWorldX, hoverWorldY;
+            screenToWorld(input.getMouseX(), input.getMouseY(), hoverWorldX, hoverWorldY);
+            for (auto* obj : gameObjects) {
+                if (obj->type == GameObjectType::CARGO && obj->active) {
+                    auto* cargo = static_cast<const Cargo*>(obj);
+                    if (!cargo->isOnGround()) continue;
+                    // AABB hit test
+                    if (hoverWorldX >= cargo->x && hoverWorldX <= cargo->x + cargo->width &&
+                        hoverWorldY >= cargo->y && hoverWorldY <= cargo->y + cargo->height) {
+                        hoveredCargoType = cargo->cargoType;
+                        break;
+                    }
+                }
+            }
+        }
 
         // Cargo ghost cursor: show translucent cargo at mouse position when carrying
         if (!editMode && localPlayer && localPlayer->isCarrying() && mapReceived) {
@@ -262,6 +302,13 @@ void GameClient::run() {
 
         if (localPlayer) {
             renderer.renderHUD(localPlayer, gameObjects, stationMoney);
+        }
+
+        // Render cargo tooltip in screen space if hovering over cargo
+        if (hoveredCargoType != CargoType::NONE) {
+            renderer.beginScreenSpace();
+            renderer.renderCargoTooltip(input.getMouseX(), input.getMouseY(), hoveredCargoType);
+            renderer.endScreenSpace();
         }
 
         // Render UI on top of everything

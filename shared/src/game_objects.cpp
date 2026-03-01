@@ -77,9 +77,13 @@ void Ship::applyClassStats(ShipClass sc) {
     maxFuel = stats.maxFuel;
     maxFood = stats.maxFood;
     metalToUnload = stats.metalToUnload;
-    woodToUnload = stats.woodToUnload;
+    oreToUnload = stats.oreToUnload;
+    crystalsToUnload = stats.crystalsToUnload;
+    plasmaToUnload = stats.plasmaToUnload;
     totalMetal = stats.metalToUnload;
-    totalWood = stats.woodToUnload;
+    totalOre = stats.oreToUnload;
+    totalCrystals = stats.crystalsToUnload;
+    totalPlasma = stats.plasmaToUnload;
     passengers = stats.passengers;
     maxPatience = stats.patienceTime;
     patienceTimer = maxPatience;
@@ -98,9 +102,13 @@ void Ship::serialize(ByteBuffer& buf) const {
     buf.writeFloat(targetX);
     buf.writeFloat(targetY);
     buf.writeU8(metalToUnload);
-    buf.writeU8(woodToUnload);
+    buf.writeU8(oreToUnload);
+    buf.writeU8(crystalsToUnload);
+    buf.writeU8(plasmaToUnload);
     buf.writeU8(totalMetal);
-    buf.writeU8(totalWood);
+    buf.writeU8(totalOre);
+    buf.writeU8(totalCrystals);
+    buf.writeU8(totalPlasma);
     buf.writeU8(passengers);
     buf.writeFloat(patienceTimer);
     buf.writeFloat(maxPatience);
@@ -118,9 +126,13 @@ void Ship::deserialize(ByteBuffer& buf) {
     targetX = buf.readFloat();
     targetY = buf.readFloat();
     metalToUnload = buf.readU8();
-    woodToUnload = buf.readU8();
+    oreToUnload = buf.readU8();
+    crystalsToUnload = buf.readU8();
+    plasmaToUnload = buf.readU8();
     totalMetal = buf.readU8();
-    totalWood = buf.readU8();
+    totalOre = buf.readU8();
+    totalCrystals = buf.readU8();
+    totalPlasma = buf.readU8();
     passengers = buf.readU8();
     patienceTimer = buf.readFloat();
     maxPatience = buf.readFloat();
@@ -143,12 +155,16 @@ void Cargo::serialize(ByteBuffer& buf) const {
     buf.writeU8(static_cast<uint8_t>(cargoType));
     buf.writeU8(quantity);
     buf.writeU32(carriedByPlayerId);
+    buf.writeU32(tetheredToPlayerId);
+    buf.writeU8(tetherOrder);
 }
 void Cargo::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
     cargoType = static_cast<CargoType>(buf.readU8());
     quantity = buf.readU8();
     carriedByPlayerId = buf.readU32();
+    tetheredToPlayerId = buf.readU32();
+    tetherOrder = buf.readU8();
 }
 
 // --- Player ---

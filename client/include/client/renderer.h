@@ -36,6 +36,12 @@ public:
     void drawUIOutline(float x, float y, float w, float h, float thickness, float r, float g, float b, float a = 1.0f);
     void drawWorldRect(float x, float y, float w, float h, float r, float g, float b, float a = 1.0f);
 
+    // Cargo tooltip (call in screen space)
+    void renderCargoTooltip(float screenX, float screenY, CargoType type);
+
+    // Tether ropes (call in world space, after renderObjects)
+    void renderTetherRopes(const std::vector<GameObject*>& objects);
+
     GLFWwindow* getWindow() const { return window; }
     int getWindowWidth() const { return windowWidth; }
     int getWindowHeight() const { return windowHeight; }
@@ -65,9 +71,6 @@ private:
     void drawRect(float x, float y, float w, float h, float r, float g, float b, float a = 1.0f);
     void drawCircle(float cx, float cy, float radius, float r, float g, float b);
     glm::vec4 getColorForObject(const GameObject* obj) const;
-
-    // Ship cargo hold rendering
-    void renderShipCargo(const Ship* ship);
 
     // Objectives panel rendering
     void renderObjectivesPanel(const Ship* ship);

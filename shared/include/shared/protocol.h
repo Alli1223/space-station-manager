@@ -14,6 +14,7 @@ enum class MessageType : uint8_t {
     MSG_INTERACT = 3,
     MSG_CELL_EDIT = 4,
     MSG_CARGO_PLACE = 5,
+    MSG_TETHER_TOGGLE = 6,
 
     // Server -> Client
     MSG_WELCOME = 10,
@@ -47,6 +48,7 @@ ByteBuffer buildJoinMessage(const std::string& playerName);
 ByteBuffer buildInputMessage(float dx, float dy, bool interact);
 ByteBuffer buildCellEditMessage(int16_t gridX, int16_t gridY, CellType cellType);
 ByteBuffer buildCargoPlaceMessage(float targetX, float targetY);
+ByteBuffer buildTetherToggleMessage(uint32_t cargoId);
 
 // Server -> Client
 ByteBuffer buildWelcomeMessage(uint32_t playerId, const std::vector<uint8_t>& mapData,

@@ -46,6 +46,7 @@ public:
     void sendInput(float dx, float dy, bool interact);
     void sendCellEdit(int16_t gridX, int16_t gridY, CellType cellType);
     void sendCargoPlace(float targetX, float targetY);
+    void sendTetherToggle(uint32_t cargoId);
 
     bool isConnected() const { return connected; }
 

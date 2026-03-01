@@ -37,6 +37,7 @@ private:
     void spawnShip(std::vector<GameObject*>& allObjects);
     void updateShip(Ship* ship, float dt, std::vector<GameObject*>& allObjects);
     void unloadCargo(Ship* ship, std::vector<GameObject*>& allObjects);
+    void destroyCargoInsideShip(Ship* ship, std::vector<GameObject*>& allObjects);
     DockingCollar* findCollar(uint32_t collarId);
     DockingCollar* findFreeCollar();
     void setAirlockState(DockingCollar* collar, std::vector<GameObject*>& allObjects, bool open);

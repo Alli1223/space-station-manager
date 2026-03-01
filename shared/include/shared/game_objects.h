@@ -70,9 +70,13 @@ public:
     float targetY = 0.0f;
     // Cargo manifest: what the ship is carrying to unload
     uint8_t metalToUnload = 5;
-    uint8_t woodToUnload = 3;
-    uint8_t totalMetal = 5;   // original amount (for HUD rendering)
-    uint8_t totalWood = 3;    // original amount (for HUD rendering)
+    uint8_t oreToUnload = 3;
+    uint8_t crystalsToUnload = 0;
+    uint8_t plasmaToUnload = 0;
+    uint8_t totalMetal = 5;       // original amount (for HUD rendering)
+    uint8_t totalOre = 3;
+    uint8_t totalCrystals = 0;
+    uint8_t totalPlasma = 0;
     uint8_t passengers = 0;   // stored for future use
     float patienceTimer = 60.0f;
     float maxPatience = 60.0f;
@@ -97,11 +101,14 @@ public:
     CargoType cargoType = CargoType::NONE;
     uint8_t quantity = 1;
     uint32_t carriedByPlayerId = 0; // 0 = on ground
+    uint32_t tetheredToPlayerId = 0; // 0 = not tethered
+    uint8_t tetherOrder = 0; // position in chain: 0 = closest to player
 
     Cargo();
     Cargo(uint32_t id, float x, float y, CargoType cargoType, uint8_t quantity);
 
     bool isOnGround() const { return carriedByPlayerId == 0; }
+    bool isTethered() const { return tetheredToPlayerId != 0; }
 
     void serialize(ByteBuffer& buf) const override;
     void deserialize(ByteBuffer& buf) override;

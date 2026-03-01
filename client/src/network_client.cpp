@@ -192,6 +192,17 @@ void NetworkClient::sendCargoPlace(float targetX, float targetY) {
 #endif
 }
 
+void NetworkClient::sendTetherToggle(uint32_t cargoId) {
+    if (!connected) return;
+    auto payload = buildTetherToggleMessage(cargoId);
+    auto encoded = encodeMessage(MessageType::MSG_TETHER_TOGGLE, payload);
+#ifdef _WIN32
+    send(sock, (const char*)encoded.data(), static_cast<int>(encoded.size()), 0);
+#else
+    send(sock, encoded.data(), encoded.size(), MSG_NOSIGNAL);
+#endif
+}
+
 void NetworkClient::setNonBlocking(SocketType s) {
 #ifdef _WIN32
     u_long mode = 1;

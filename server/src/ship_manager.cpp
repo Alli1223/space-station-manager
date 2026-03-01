@@ -42,7 +42,7 @@ void ShipManager::spawnShip(std::vector<GameObject*>& allObjects) {
 
     ShipClass sc = rollShipClass();
 
-    auto* ship = new Ship(generateId(), collar->x, collar->y - 200.0f);
+    auto* ship = new Ship(generateId(), collar->x, collar->y - 400.0f);
     ship->applyClassStats(sc);
     ship->targetCollarId = collar->id;
     ship->targetX = collar->x - (ship->width - CELL_SIZE) / 2.0f;
@@ -98,12 +98,11 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
         case ShipState::UNLOADING: {
             ship->stateTimer -= dt;
             if (ship->stateTimer <= 0.0f) {
-                // Cargo stays as virtual counts on the ship (metalToUnload, woodToUnload)
-                // Players withdraw items by interacting near the docked ship
+                // Spawn physical cargo objects inside the ship
+                unloadCargo(ship, allObjects);
                 ship->state = ShipState::WAITING_RESUPPLY;
-                std::cout << "Ship " << ship->id << " docked with cargo: "
-                          << ship->metalToUnload << " metal, "
-                          << ship->woodToUnload << " wood. Waiting for player interaction." << std::endl;
+                std::cout << "Ship " << ship->id << " docked with physical cargo inside. "
+                          << "Waiting for player to tether and drag it out." << std::endl;
             }
             break;
         }
@@ -115,6 +114,9 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
             if (ship->isResupplied()) {
                 ship->state = ShipState::DEPARTING;
                 ship->stateTimer = 2.0f;
+
+                // Destroy any leftover cargo still inside the ship
+                destroyCargoInsideShip(ship, allObjects);
 
                 // Close the airlock door and free the docking collar
                 DockingCollar* collar = findCollar(ship->targetCollarId);
@@ -139,6 +141,9 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
             else if (ship->patienceTimer <= 0.0f) {
                 ship->state = ShipState::DEPARTING;
                 ship->stateTimer = 2.0f;
+
+                // Destroy any leftover cargo still inside the ship
+                destroyCargoInsideShip(ship, allObjects);
 
                 // Close the airlock door and free the docking collar
                 DockingCollar* collar = findCollar(ship->targetCollarId);
@@ -190,29 +195,75 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
 }
 
 void ShipManager::unloadCargo(Ship* ship, std::vector<GameObject*>& allObjects) {
-    DockingCollar* collar = findCollar(ship->targetCollarId);
-    if (!collar) return;
+    // Spawn physical Cargo objects inside the ship interior in a grid layout
+    // Interior starts at (ship.x + 8, ship.y + 8) — 4px wall + 4px padding
+    constexpr float WALL_PAD = 8.0f;
+    constexpr float CARGO_SIZE = 16.0f;
+    constexpr float CARGO_GAP = 4.0f;
+    constexpr float STRIDE = CARGO_SIZE + CARGO_GAP; // 20px
 
-    // Place cargo near the docking collar (inside the station)
-    float cargoX = collar->x;
-    float cargoY = collar->y + CELL_SIZE; // one cell below the collar (inside)
-    float offset = 0;
+    float interiorW = ship->width - WALL_PAD * 2.0f;
+    int cols = static_cast<int>(interiorW / STRIDE);
+    if (cols < 1) cols = 1;
 
-    for (int i = 0; i < ship->metalToUnload; i++) {
-        auto* cargo = new Cargo(generateId(), cargoX + offset, cargoY, CargoType::METAL, 1);
+    float startX = ship->x + WALL_PAD;
+    float startY = ship->y + WALL_PAD;
+    int col = 0;
+    int row = 0;
+
+    auto placeCargo = [&](CargoType type) {
+        float cx = startX + col * STRIDE;
+        float cy = startY + row * STRIDE;
+        auto* cargo = new Cargo(generateId(), cx, cy, type, 1);
         allObjects.push_back(cargo);
-        offset += 18.0f;
-        if (offset > CELL_SIZE * 2) { offset = 0; cargoY += 18.0f; }
-    }
-    for (int i = 0; i < ship->woodToUnload; i++) {
-        auto* cargo = new Cargo(generateId(), cargoX + offset, cargoY, CargoType::WOOD, 1);
-        allObjects.push_back(cargo);
-        offset += 18.0f;
-        if (offset > CELL_SIZE * 2) { offset = 0; cargoY += 18.0f; }
-    }
+        col++;
+        if (col >= cols) {
+            col = 0;
+            row++;
+        }
+    };
 
+    for (int i = 0; i < ship->metalToUnload; i++) placeCargo(CargoType::METAL);
+    for (int i = 0; i < ship->oreToUnload; i++) placeCargo(CargoType::ORE);
+    for (int i = 0; i < ship->crystalsToUnload; i++) placeCargo(CargoType::CRYSTALS);
+    for (int i = 0; i < ship->plasmaToUnload; i++) placeCargo(CargoType::PLASMA);
+
+    std::cout << "Spawned " << (ship->metalToUnload + ship->oreToUnload +
+                 ship->crystalsToUnload + ship->plasmaToUnload)
+              << " physical cargo items inside ship " << ship->id << std::endl;
+
+    // Zero out virtual counts — totalMetal/etc stay for objectives panel
     ship->metalToUnload = 0;
-    ship->woodToUnload = 0;
+    ship->oreToUnload = 0;
+    ship->crystalsToUnload = 0;
+    ship->plasmaToUnload = 0;
+}
+
+void ShipManager::destroyCargoInsideShip(Ship* ship, std::vector<GameObject*>& allObjects) {
+    // Destroy any cargo objects that are still inside the ship bounds
+    // but NOT tethered or carried by a player (those were saved!)
+    int destroyed = 0;
+    for (auto* obj : allObjects) {
+        if (obj->type != GameObjectType::CARGO || !obj->active) continue;
+        auto* cargo = static_cast<Cargo*>(obj);
+
+        // Skip if a player is carrying or tethering this cargo
+        if (cargo->carriedByPlayerId != 0) continue;
+        if (cargo->tetheredToPlayerId != 0) continue;
+
+        // Check if cargo center is inside ship bounds
+        float ccx = cargo->x + cargo->width / 2.0f;
+        float ccy = cargo->y + cargo->height / 2.0f;
+        if (ccx >= ship->x && ccx < ship->x + ship->width &&
+            ccy >= ship->y && ccy < ship->y + ship->height) {
+            cargo->active = false;
+            destroyed++;
+        }
+    }
+    if (destroyed > 0) {
+        std::cout << "Destroyed " << destroyed << " leftover cargo inside ship "
+                  << ship->id << " on departure" << std::endl;
+    }
 }
 
 bool ShipManager::loadCargoOntoShip(Ship* ship, Cargo* cargo) {
@@ -230,7 +281,7 @@ bool ShipManager::loadCargoOntoShip(Ship* ship, Cargo* cargo) {
             cargo->active = false;
             return true;
         default:
-            return false; // ships don't accept metal/wood back
+            return false; // ships don't accept materials back
     }
 }
 

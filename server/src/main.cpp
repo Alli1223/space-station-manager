@@ -77,6 +77,10 @@ int main(int argc, char* argv[]) {
         world.onCargoPlace(clientIndex, tx, ty);
     };
 
+    network.onTetherToggle = [&](uint32_t clientIndex, uint32_t cargoId) {
+        world.onTetherToggle(clientIndex, cargoId);
+    };
+
     if (!network.start(port)) {
         std::cerr << "Failed to start network server" << std::endl;
         return 1;

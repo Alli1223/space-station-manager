@@ -3,6 +3,8 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <iostream>
 #include <cmath>
+#include <algorithm>
+#include <unordered_map>
 
 namespace ssm {
 
@@ -293,13 +295,7 @@ glm::vec4 Renderer::getColorForObject(const GameObject* obj) const {
         }
         case GameObjectType::CARGO: {
             auto* cargo = static_cast<const Cargo*>(obj);
-            switch (cargo->cargoType) {
-                case CargoType::METAL: return {0.75f, 0.75f, 0.8f, 1.0f};
-                case CargoType::WOOD:  return {0.6f, 0.4f, 0.2f, 1.0f};
-                case CargoType::FUEL:  return {0.9f, 0.9f, 0.2f, 1.0f};
-                case CargoType::FOOD:  return {0.3f, 0.8f, 0.3f, 1.0f};
-                default:               return {0.5f, 0.5f, 0.5f, 1.0f};
-            }
+            return getCargoTypeColor(cargo->cargoType);
         }
         default:
             return {1.0f, 1.0f, 1.0f, 1.0f};
@@ -331,9 +327,13 @@ void Renderer::renderObject(const GameObject* obj) {
         auto* ship = static_cast<const Ship*>(obj);
         glm::vec4 color = getColorForObject(obj);
         drawRect(obj->x, obj->y, obj->width, obj->height, color.r, color.g, color.b, color.a);
-        // Draw cargo hold contents if docked
-        if (ship->state == ShipState::UNLOADING || ship->state == ShipState::WAITING_RESUPPLY) {
-            renderShipCargo(ship);
+        // Draw dark interior for docked ships (accessible through open bottom)
+        if (ship->state == ShipState::DOCKING || ship->state == ShipState::UNLOADING ||
+            ship->state == ShipState::WAITING_RESUPPLY) {
+            float wallT = 4.0f;
+            drawRect(ship->x + wallT, ship->y + wallT,
+                     ship->width - 2.0f * wallT, ship->height - wallT,
+                     0.12f, 0.12f, 0.18f, 0.9f);
         }
         return;
     }
@@ -484,67 +484,20 @@ void Renderer::drawWorldRect(float x, float y, float w, float h, float r, float 
 
 glm::vec4 Renderer::getCargoTypeColor(CargoType type) {
     switch (type) {
-        case CargoType::METAL: return {0.75f, 0.75f, 0.8f, 1.0f};
-        case CargoType::WOOD:  return {0.6f, 0.4f, 0.2f, 1.0f};
-        case CargoType::FUEL:  return {0.9f, 0.9f, 0.2f, 1.0f};
-        case CargoType::FOOD:  return {0.3f, 0.8f, 0.3f, 1.0f};
-        default:               return {0.5f, 0.5f, 0.5f, 1.0f};
-    }
-}
-
-void Renderer::renderShipCargo(const Ship* ship) {
-    // Draw a dark cargo hold area inset on the ship body
-    float holdX = ship->x + 4.0f;
-    float holdY = ship->y + 4.0f;
-    float holdW = ship->width - 8.0f;
-    float holdH = ship->height * 0.5f; // upper half of the ship is the cargo hold
-
-    drawRect(holdX, holdY, holdW, holdH, 0.15f, 0.15f, 0.2f, 0.8f);
-
-    // Draw cargo items as small colored squares in a grid layout
-    float itemSize = 10.0f;
-    float padding = 2.0f;
-    float startX = holdX + padding;
-    float startY = holdY + padding;
-    float curX = startX;
-    float curY = startY;
-    int cols = static_cast<int>((holdW - padding * 2) / (itemSize + padding));
-    if (cols < 1) cols = 1;
-    int col = 0;
-
-    // Draw metal items
-    glm::vec4 metalColor = getCargoTypeColor(CargoType::METAL);
-    for (int i = 0; i < ship->metalToUnload; i++) {
-        drawRect(curX, curY, itemSize, itemSize, metalColor.r, metalColor.g, metalColor.b);
-        col++;
-        if (col >= cols) {
-            col = 0;
-            curX = startX;
-            curY += itemSize + padding;
-        } else {
-            curX += itemSize + padding;
-        }
-    }
-
-    // Draw wood items
-    glm::vec4 woodColor = getCargoTypeColor(CargoType::WOOD);
-    for (int i = 0; i < ship->woodToUnload; i++) {
-        drawRect(curX, curY, itemSize, itemSize, woodColor.r, woodColor.g, woodColor.b);
-        col++;
-        if (col >= cols) {
-            col = 0;
-            curX = startX;
-            curY += itemSize + padding;
-        } else {
-            curX += itemSize + padding;
-        }
+        case CargoType::METAL:    return {0.75f, 0.75f, 0.8f, 1.0f};   // silver
+        case CargoType::ORE:      return {0.7f, 0.45f, 0.25f, 1.0f};   // rusty orange-brown
+        case CargoType::FUEL:     return {0.9f, 0.9f, 0.2f, 1.0f};     // bright yellow
+        case CargoType::FOOD:     return {0.3f, 0.8f, 0.3f, 1.0f};     // green
+        case CargoType::CRYSTALS: return {0.6f, 0.3f, 0.9f, 1.0f};     // purple
+        case CargoType::PLASMA:   return {0.2f, 0.9f, 0.9f, 1.0f};     // bright cyan
+        default:                  return {0.5f, 0.5f, 0.5f, 1.0f};
     }
 }
 
 void Renderer::renderObjectivesPanel(const Ship* ship) {
     // Panel on the right side of screen
     float panelW = 120.0f;
-    float panelH = 230.0f;
+    float panelH = 290.0f;
     float panelX = windowWidth - panelW - 10.0f;
     float panelY = 40.0f;
 
@@ -556,47 +509,18 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
     float dotSize = 6.0f;
     float sectionPad = 12.0f;
 
-    // === EXPORT SECTION (items to take off ship) ===
-    // Section header bar
-    drawRect(panelX, y, panelW, 3.0f, 0.8f, 0.4f, 0.2f); // orange bar = export
-    y += 8.0f;
-
-    // Metal row
-    {
-        glm::vec4 mc = getCargoTypeColor(CargoType::METAL);
-        bool allTaken = (ship->metalToUnload == 0);
-        drawRect(panelX + 8.0f, y, iconSize, iconSize, mc.r, mc.g, mc.b);
-        if (allTaken) {
-            // Green overlay on icon when all taken
-            drawRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
-        }
-        // Dot indicators
-        int totalMetal = ship->totalMetal;
-        float dotX = panelX + 8.0f + iconSize + 6.0f;
-        for (int i = 0; i < totalMetal; i++) {
-            bool withdrawn = (i >= ship->metalToUnload);
-            if (withdrawn) {
-                drawRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.2f, 0.9f, 0.2f); // green = done
-            } else {
-                drawRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.5f, 0.5f, 0.55f); // gray = remaining
-            }
-            dotX += dotSize + 2.0f;
-        }
-        y += iconSize + 6.0f;
-    }
-
-    // Wood row
-    {
-        glm::vec4 wc = getCargoTypeColor(CargoType::WOOD);
-        bool allTaken = (ship->woodToUnload == 0);
-        drawRect(panelX + 8.0f, y, iconSize, iconSize, wc.r, wc.g, wc.b);
+    // Helper lambda for export dot-indicator rows
+    auto drawExportRow = [&](CargoType ctype, uint8_t remaining, uint8_t total, bool lastInSection) {
+        if (total == 0) return; // skip rows with zero total
+        glm::vec4 c = getCargoTypeColor(ctype);
+        bool allTaken = (remaining == 0);
+        drawRect(panelX + 8.0f, y, iconSize, iconSize, c.r, c.g, c.b);
         if (allTaken) {
             drawRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
         }
-        int totalWood = ship->totalWood;
         float dotX = panelX + 8.0f + iconSize + 6.0f;
-        for (int i = 0; i < totalWood; i++) {
-            bool withdrawn = (i >= ship->woodToUnload);
+        for (int i = 0; i < total; i++) {
+            bool withdrawn = (i >= remaining);
             if (withdrawn) {
                 drawRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.2f, 0.9f, 0.2f);
             } else {
@@ -604,8 +528,22 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
             }
             dotX += dotSize + 2.0f;
         }
-        y += iconSize + sectionPad;
-    }
+        y += iconSize + (lastInSection ? sectionPad : 6.0f);
+    };
+
+    // === EXPORT SECTION (items to take off ship) ===
+    // Section header bar
+    drawRect(panelX, y, panelW, 3.0f, 0.8f, 0.4f, 0.2f); // orange bar = export
+    y += 8.0f;
+
+    // Metal row
+    drawExportRow(CargoType::METAL, ship->metalToUnload, ship->totalMetal, false);
+    // Ore row
+    drawExportRow(CargoType::ORE, ship->oreToUnload, ship->totalOre, false);
+    // Crystals row
+    drawExportRow(CargoType::CRYSTALS, ship->crystalsToUnload, ship->totalCrystals, false);
+    // Plasma row
+    drawExportRow(CargoType::PLASMA, ship->plasmaToUnload, ship->totalPlasma, true);
 
     // === IMPORT SECTION (items to load onto ship) ===
     // Section header bar
@@ -692,6 +630,161 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
         drawRect(pBarX, y, pBarW, pBarH, 0.2f, 0.2f, 0.2f);
         // Fill
         drawRect(pBarX, y, pBarW * pct, pBarH, pr, pg, pb, alpha);
+    }
+}
+
+void Renderer::renderCargoTooltip(float screenX, float screenY, CargoType type) {
+    // Tooltip: small dark panel with colored square + distinctive icon shape
+    float tooltipW = 44.0f;
+    float tooltipH = 24.0f;
+    // Offset so tooltip doesn't overlap cursor
+    float tx = screenX + 12.0f;
+    float ty = screenY - tooltipH - 4.0f;
+    // Clamp to window
+    if (tx + tooltipW > windowWidth) tx = screenX - tooltipW - 4.0f;
+    if (ty < 0) ty = screenY + 16.0f;
+
+    // Background panel
+    drawRect(tx, ty, tooltipW, tooltipH, 0.08f, 0.08f, 0.12f, 0.9f);
+    // Border
+    drawRect(tx, ty, tooltipW, 1.0f, 0.4f, 0.4f, 0.45f, 0.8f);
+    drawRect(tx, ty + tooltipH - 1.0f, tooltipW, 1.0f, 0.4f, 0.4f, 0.45f, 0.8f);
+    drawRect(tx, ty, 1.0f, tooltipH, 0.4f, 0.4f, 0.45f, 0.8f);
+    drawRect(tx + tooltipW - 1.0f, ty, 1.0f, tooltipH, 0.4f, 0.4f, 0.45f, 0.8f);
+
+    // Colored cargo square
+    glm::vec4 c = getCargoTypeColor(type);
+    float sqX = tx + 4.0f;
+    float sqY = ty + 4.0f;
+    float sqSize = 16.0f;
+    drawRect(sqX, sqY, sqSize, sqSize, c.r, c.g, c.b);
+
+    // Distinctive icon next to the square (approx 12x12, using simple shapes)
+    float iconX = sqX + sqSize + 4.0f;
+    float iconY = sqY + 2.0f;
+    float iconS = 12.0f;
+
+    switch (type) {
+        case CargoType::METAL:
+            // Three horizontal bars (ingot-like)
+            drawRect(iconX, iconY, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
+            drawRect(iconX, iconY + 4.5f, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
+            drawRect(iconX, iconY + 9.0f, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
+            break;
+        case CargoType::ORE:
+            // Rough diamond shape (rotated square via 4 rects)
+            drawRect(iconX + 3.0f, iconY, 6.0f, 4.0f, c.r, c.g, c.b);
+            drawRect(iconX + 1.0f, iconY + 3.0f, 10.0f, 6.0f, c.r, c.g, c.b);
+            drawRect(iconX + 3.0f, iconY + 8.0f, 6.0f, 4.0f, c.r, c.g, c.b);
+            break;
+        case CargoType::CRYSTALS:
+            // Pointy triangle shape (stacked rects narrowing upward)
+            drawRect(iconX + 4.0f, iconY, 4.0f, 3.0f, c.r, c.g, c.b);
+            drawRect(iconX + 2.0f, iconY + 3.0f, 8.0f, 3.0f, c.r, c.g, c.b);
+            drawRect(iconX, iconY + 6.0f, 12.0f, 6.0f, c.r, c.g, c.b);
+            break;
+        case CargoType::PLASMA:
+            // Circle approximation (small filled square with rounded corners via overlapping rects)
+            drawRect(iconX + 2.0f, iconY, 8.0f, 12.0f, c.r, c.g, c.b);
+            drawRect(iconX, iconY + 2.0f, 12.0f, 8.0f, c.r, c.g, c.b);
+            break;
+        case CargoType::FUEL:
+            // Flame shape (narrow at top, wide at bottom)
+            drawRect(iconX + 4.0f, iconY, 4.0f, 4.0f, c.r, c.g, c.b);
+            drawRect(iconX + 2.0f, iconY + 4.0f, 8.0f, 4.0f, c.r, c.g, c.b);
+            drawRect(iconX + 1.0f, iconY + 8.0f, 10.0f, 4.0f, c.r, c.g, c.b);
+            break;
+        case CargoType::FOOD:
+            // Leaf shape (small at edges, big in center)
+            drawRect(iconX + 3.0f, iconY, 6.0f, 2.0f, c.r, c.g, c.b);
+            drawRect(iconX + 1.0f, iconY + 2.0f, 10.0f, 8.0f, c.r, c.g, c.b);
+            drawRect(iconX + 3.0f, iconY + 10.0f, 6.0f, 2.0f, c.r, c.g, c.b);
+            break;
+        default:
+            drawRect(iconX, iconY, iconS, iconS, 0.5f, 0.5f, 0.5f);
+            break;
+    }
+}
+
+void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
+    // Draw lines (as thin rects) from each tethered cargo to its anchor
+    // Anchor: player (tetherOrder==0) or previous cargo in the chain
+
+    // First, find all players (for color lookup)
+    std::unordered_map<uint32_t, const Player*> playersById;
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::PLAYER && obj->active) {
+            playersById[obj->id] = static_cast<const Player*>(obj);
+        }
+    }
+
+    // Gather tethered cargo grouped by player, sorted by tetherOrder
+    std::unordered_map<uint32_t, std::vector<const Cargo*>> tetheredByPlayer;
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::CARGO && obj->active) {
+            auto* cargo = static_cast<const Cargo*>(obj);
+            if (cargo->isTethered()) {
+                tetheredByPlayer[cargo->tetheredToPlayerId].push_back(cargo);
+            }
+        }
+    }
+
+    for (auto& [playerId, cargoList] : tetheredByPlayer) {
+        // Sort by tetherOrder
+        std::sort(cargoList.begin(), cargoList.end(), [](const Cargo* a, const Cargo* b) {
+            return a->tetherOrder < b->tetherOrder;
+        });
+
+        auto playerIt = playersById.find(playerId);
+        if (playerIt == playersById.end()) continue;
+        const Player* player = playerIt->second;
+
+        // Get player color for the rope
+        uint8_t ci = player->colorIndex % 8;
+        float pr = PLAYER_COLORS[ci][0];
+        float pg = PLAYER_COLORS[ci][1];
+        float pb = PLAYER_COLORS[ci][2];
+
+        for (size_t i = 0; i < cargoList.size(); i++) {
+            const Cargo* cargo = cargoList[i];
+
+            float toX, toY; // anchor point
+            if (i == 0) {
+                toX = player->x + player->width / 2.0f;
+                toY = player->y + player->height / 2.0f;
+            } else {
+                toX = cargoList[i - 1]->x + cargoList[i - 1]->width / 2.0f;
+                toY = cargoList[i - 1]->y + cargoList[i - 1]->height / 2.0f;
+            }
+
+            float fromX = cargo->x + cargo->width / 2.0f;
+            float fromY = cargo->y + cargo->height / 2.0f;
+
+            // Draw a series of small rects along the line
+            float dx = toX - fromX;
+            float dy = toY - fromY;
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < 1.0f) continue;
+
+            int segments = static_cast<int>(dist / 4.0f);
+            if (segments < 2) segments = 2;
+            if (segments > 30) segments = 30;
+
+            float segW = 3.0f; // rope thickness
+            float segH = 3.0f;
+
+            for (int s = 0; s <= segments; s++) {
+                float t = static_cast<float>(s) / static_cast<float>(segments);
+                float sx = fromX + dx * t - segW / 2.0f;
+                float sy = fromY + dy * t - segH / 2.0f;
+
+                // Add a slight sag (catenary approximation)
+                float sag = 4.0f * t * (1.0f - t) * (std::min)(dist * 0.1f, 8.0f);
+                sy += sag;
+
+                drawRect(sx, sy, segW, segH, pr, pg, pb, 0.8f);
+            }
+        }
     }
 }
 

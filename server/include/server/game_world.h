@@ -28,6 +28,9 @@ public:
     // Cargo placement: player clicks to place carried cargo at world position
     void onCargoPlace(uint32_t clientIndex, float targetX, float targetY);
 
+    // Tether toggle: player clicks cargo to attach/detach rope
+    void onTetherToggle(uint32_t clientIndex, uint32_t cargoId);
+
     // Build state snapshot for network
     ByteBuffer buildStateSnapshot();
     ByteBuffer buildWelcome(uint32_t playerId);

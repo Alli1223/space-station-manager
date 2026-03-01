@@ -185,6 +185,174 @@ void GameWorld::update(float dt) {
         }
     }
 
+    // Collect on-ground cargo for physics passes
+    std::vector<Cargo*> groundCargo;
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::CARGO && obj->active) {
+            auto* cargo = static_cast<Cargo*>(obj);
+            if (cargo->isOnGround()) groundCargo.push_back(cargo);
+        }
+    }
+
+    // Cargo physics: push on-ground cargo items when players overlap them
+    for (auto& [clientIdx, player] : playersByClientIndex) {
+        if (!player->active) continue;
+
+        float pcx = player->x + player->width / 2.0f;
+        float pcy = player->y + player->height / 2.0f;
+
+        for (auto* cargo : groundCargo) {
+            // AABB overlap test
+            if (player->x >= cargo->x + cargo->width || player->x + player->width <= cargo->x ||
+                player->y >= cargo->y + cargo->height || player->y + player->height <= cargo->y) {
+                continue; // no overlap
+            }
+
+            // Calculate push direction from player center to cargo center
+            float ccx = cargo->x + cargo->width / 2.0f;
+            float ccy = cargo->y + cargo->height / 2.0f;
+            float pushDx = ccx - pcx;
+            float pushDy = ccy - pcy;
+            float pushLen = std::sqrt(pushDx * pushDx + pushDy * pushDy);
+            if (pushLen < 0.01f) { pushDx = 1.0f; pushDy = 0.0f; pushLen = 1.0f; }
+            pushDx /= pushLen;
+            pushDy /= pushLen;
+
+            // Calculate overlap amounts on each axis
+            float overlapX = (std::min)(player->x + player->width, cargo->x + cargo->width)
+                           - (std::max)(player->x, cargo->x);
+            float overlapY = (std::min)(player->y + player->height, cargo->y + cargo->height)
+                           - (std::max)(player->y, cargo->y);
+
+            // Push cargo out of overlap — use axis-separated resolution
+            float newCargoX = cargo->x;
+            float newCargoY = cargo->y;
+
+            if (overlapX < overlapY) {
+                newCargoX += (pushDx > 0 ? overlapX : -overlapX);
+            } else {
+                newCargoY += (pushDy > 0 ? overlapY : -overlapY);
+            }
+
+            // Check if new position is valid (no wall collision)
+            if (!collision.wouldCargoCollide(map, doors, newCargoX, cargo->y, cargo->width, cargo->height)) {
+                cargo->x = newCargoX;
+            }
+            if (!collision.wouldCargoCollide(map, doors, cargo->x, newCargoY, cargo->width, cargo->height)) {
+                cargo->y = newCargoY;
+            }
+        }
+    }
+
+    // Cargo-to-cargo collision resolution (up to 3 iterations to settle chains)
+    for (int iter = 0; iter < 3; iter++) {
+        bool anyPushed = false;
+        for (size_t i = 0; i < groundCargo.size(); i++) {
+            auto* cargoA = groundCargo[i];
+            for (size_t j = i + 1; j < groundCargo.size(); j++) {
+                auto* cargoB = groundCargo[j];
+
+                // AABB overlap test
+                if (cargoA->x >= cargoB->x + cargoB->width || cargoA->x + cargoA->width <= cargoB->x ||
+                    cargoA->y >= cargoB->y + cargoB->height || cargoA->y + cargoA->height <= cargoB->y) {
+                    continue; // no overlap
+                }
+
+                // Calculate overlap amounts
+                float overlapX = (std::min)(cargoA->x + cargoA->width, cargoB->x + cargoB->width)
+                               - (std::max)(cargoA->x, cargoB->x);
+                float overlapY = (std::min)(cargoA->y + cargoA->height, cargoB->y + cargoB->height)
+                               - (std::max)(cargoA->y, cargoB->y);
+
+                // Push direction: from A center to B center
+                float acx = cargoA->x + cargoA->width / 2.0f;
+                float acy = cargoA->y + cargoA->height / 2.0f;
+                float bcx = cargoB->x + cargoB->width / 2.0f;
+                float bcy = cargoB->y + cargoB->height / 2.0f;
+                float pdx = bcx - acx;
+                float pdy = bcy - acy;
+
+                // Push B away from A along the axis with smallest overlap
+                if (overlapX < overlapY) {
+                    float pushX = (pdx > 0 ? overlapX : -overlapX);
+                    float newBX = cargoB->x + pushX;
+                    if (!collision.wouldCargoCollide(map, doors, newBX, cargoB->y, cargoB->width, cargoB->height)) {
+                        cargoB->x = newBX;
+                        anyPushed = true;
+                    }
+                } else {
+                    float pushY = (pdy > 0 ? overlapY : -overlapY);
+                    float newBY = cargoB->y + pushY;
+                    if (!collision.wouldCargoCollide(map, doors, cargoB->x, newBY, cargoB->width, cargoB->height)) {
+                        cargoB->y = newBY;
+                        anyPushed = true;
+                    }
+                }
+            }
+        }
+        if (!anyPushed) break; // settled
+    }
+
+    // Tether elastic rope physics
+    for (auto& [clientIdx, player] : playersByClientIndex) {
+        if (!player->active) continue;
+
+        // Gather all cargo tethered to this player, sorted by tetherOrder
+        std::vector<Cargo*> tethered;
+        for (auto* cargo : groundCargo) {
+            if (cargo->tetheredToPlayerId == player->id) {
+                tethered.push_back(cargo);
+            }
+        }
+        if (tethered.empty()) continue;
+
+        // Sort by tetherOrder
+        std::sort(tethered.begin(), tethered.end(), [](const Cargo* a, const Cargo* b) {
+            return a->tetherOrder < b->tetherOrder;
+        });
+
+        constexpr float REST_LENGTH = 30.0f;
+        constexpr float ELASTICITY = 0.3f;
+
+        for (size_t i = 0; i < tethered.size(); i++) {
+            Cargo* cargo = tethered[i];
+
+            // Target: player center (first in chain) or previous cargo center
+            float targetX, targetY;
+            if (i == 0) {
+                targetX = player->x + player->width / 2.0f;
+                targetY = player->y + player->height / 2.0f;
+            } else {
+                targetX = tethered[i - 1]->x + tethered[i - 1]->width / 2.0f;
+                targetY = tethered[i - 1]->y + tethered[i - 1]->height / 2.0f;
+            }
+
+            float currentX = cargo->x + cargo->width / 2.0f;
+            float currentY = cargo->y + cargo->height / 2.0f;
+            float dx = targetX - currentX;
+            float dy = targetY - currentY;
+            float dist = std::sqrt(dx * dx + dy * dy);
+
+            if (dist > REST_LENGTH) {
+                // Normalize direction
+                float dirX = dx / dist;
+                float dirY = dy / dist;
+                float pullAmount = (dist - REST_LENGTH) * ELASTICITY;
+
+                float newX = cargo->x + dirX * pullAmount;
+                float newY = cargo->y + dirY * pullAmount;
+
+                // Check wall collision before committing (axis-separated)
+                if (!collision.wouldCargoCollide(map, doors, newX, cargo->y, cargo->width, cargo->height)) {
+                    cargo->x = newX;
+                }
+                if (!collision.wouldCargoCollide(map, doors, cargo->x, newY, cargo->width, cargo->height)) {
+                    cargo->y = newY;
+                }
+            }
+        }
+    }
+
     // Update ships
     shipManager.update(dt, objects);
 
@@ -246,6 +414,16 @@ void GameWorld::onPlayerDisconnect(uint32_t clientIndex) {
                 }
             }
         }
+        // Detach all tethered cargo
+        for (auto* obj : objects) {
+            if (obj->type == GameObjectType::CARGO && obj->active) {
+                auto* cargo = static_cast<Cargo*>(obj);
+                if (cargo->tetheredToPlayerId == player->id) {
+                    cargo->tetheredToPlayerId = 0;
+                    cargo->tetherOrder = 0;
+                }
+            }
+        }
         player->active = false;
         playersByClientIndex.erase(clientIndex);
         std::cout << "Player '" << player->name << "' disconnected" << std::endl;
@@ -304,6 +482,21 @@ void GameWorld::handleInteraction(Player* player) {
 
     // Cargo pickup takes priority when closer (it's the more common action)
     if (cargo && cargoDist <= termDist) {
+        // Detach tether if tethered
+        if (cargo->isTethered()) {
+            uint8_t removedOrder = cargo->tetherOrder;
+            uint32_t tetheredPlayer = cargo->tetheredToPlayerId;
+            cargo->tetheredToPlayerId = 0;
+            cargo->tetherOrder = 0;
+            for (auto* obj : objects) {
+                if (obj->type == GameObjectType::CARGO && obj->active) {
+                    auto* c = static_cast<Cargo*>(obj);
+                    if (c->tetheredToPlayerId == tetheredPlayer && c->tetherOrder > removedOrder) {
+                        c->tetherOrder--;
+                    }
+                }
+            }
+        }
         cargo->carriedByPlayerId = player->id;
         player->carryingCargoId = cargo->id;
         std::cout << "[SERVER] Player '" << player->name << "' picked up cargo " << cargo->id
@@ -369,50 +562,8 @@ void GameWorld::handleCargoPickup(Player* player) {
 }
 
 bool GameWorld::handleShipWithdraw(Player* player) {
-    float centerX = player->x + player->width / 2.0f;
-    float centerY = player->y + player->height / 2.0f;
-
-    // Find the nearest docked ship with cargo to unload
-    for (auto* obj : objects) {
-        if (obj->type != GameObjectType::SHIP || !obj->active) continue;
-        auto* ship = static_cast<Ship*>(obj);
-
-        // Ship must be in a state where cargo can be withdrawn
-        if (ship->state != ShipState::UNLOADING && ship->state != ShipState::WAITING_RESUPPLY) continue;
-
-        // Check distance to ship
-        float shipCenterX = ship->x + ship->width / 2.0f;
-        float shipCenterY = ship->y + ship->height / 2.0f;
-        float dx = centerX - shipCenterX;
-        float dy = centerY - shipCenterY;
-        float dist = std::sqrt(dx * dx + dy * dy);
-
-        if (dist >= INTERACTION_RANGE + ship->width / 2.0f) continue;
-
-        // Withdraw one item: metal first, then wood
-        CargoType withdrawType;
-        if (ship->metalToUnload > 0) {
-            ship->metalToUnload--;
-            withdrawType = CargoType::METAL;
-        } else if (ship->woodToUnload > 0) {
-            ship->woodToUnload--;
-            withdrawType = CargoType::WOOD;
-        } else {
-            continue; // this ship has nothing to give
-        }
-
-        // Create a cargo object already carried by the player
-        auto* cargo = new Cargo(generateId(), player->x, player->y - 10.0f, withdrawType, 1);
-        cargo->carriedByPlayerId = player->id;
-        player->carryingCargoId = cargo->id;
-        objects.push_back(cargo);
-
-        std::cout << "[SERVER] Player '" << player->name << "' withdrew "
-                  << (withdrawType == CargoType::METAL ? "metal" : "wood")
-                  << " from ship " << ship->id << std::endl;
-        return true;
-    }
-
+    // Cargo is now physical inside ships — players tether/drag it out.
+    // Virtual withdrawal is disabled.
     return false;
 }
 
@@ -585,6 +736,61 @@ void GameWorld::onCargoPlace(uint32_t clientIndex, float targetX, float targetY)
 
     std::cout << "Player '" << player->name << "' placed cargo at ("
               << targetX << ", " << targetY << ")" << std::endl;
+}
+
+// --- Tether Toggle ---
+
+void GameWorld::onTetherToggle(uint32_t clientIndex, uint32_t cargoId) {
+    Player* player = findPlayer(clientIndex);
+    if (!player) return;
+
+    // Find the cargo
+    Cargo* targetCargo = nullptr;
+    for (auto* obj : objects) {
+        if (obj->id == cargoId && obj->type == GameObjectType::CARGO && obj->active) {
+            targetCargo = static_cast<Cargo*>(obj);
+            break;
+        }
+    }
+    if (!targetCargo || !targetCargo->isOnGround()) return;
+
+    // If already tethered to this player → detach
+    if (targetCargo->tetheredToPlayerId == player->id) {
+        uint8_t removedOrder = targetCargo->tetherOrder;
+        targetCargo->tetheredToPlayerId = 0;
+        targetCargo->tetherOrder = 0;
+
+        // Reorder remaining tethers for this player
+        for (auto* obj : objects) {
+            if (obj->type == GameObjectType::CARGO && obj->active) {
+                auto* cargo = static_cast<Cargo*>(obj);
+                if (cargo->tetheredToPlayerId == player->id && cargo->tetherOrder > removedOrder) {
+                    cargo->tetherOrder--;
+                }
+            }
+        }
+
+        std::cout << "[SERVER] Player '" << player->name << "' detached tether from cargo " << cargoId << std::endl;
+        return;
+    }
+
+    // If tethered to another player, don't allow stealing
+    if (targetCargo->tetheredToPlayerId != 0) return;
+
+    // Attach: count existing tethered cargo for this player
+    uint8_t count = 0;
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::CARGO && obj->active) {
+            auto* cargo = static_cast<Cargo*>(obj);
+            if (cargo->tetheredToPlayerId == player->id) count++;
+        }
+    }
+
+    targetCargo->tetheredToPlayerId = player->id;
+    targetCargo->tetherOrder = count;
+
+    std::cout << "[SERVER] Player '" << player->name << "' tethered cargo " << cargoId
+              << " (order=" << static_cast<int>(count) << ")" << std::endl;
 }
 
 // --- Edit Mode ---

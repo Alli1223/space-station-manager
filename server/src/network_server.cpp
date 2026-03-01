@@ -176,6 +176,11 @@ void NetworkServer::processMessages(uint32_t clientIndex) {
                 if (onCargoPlace) onCargoPlace(clientIndex, tx, ty);
                 break;
             }
+            case MessageType::MSG_TETHER_TOGGLE: {
+                uint32_t cargoId = payload.readU32();
+                if (onTetherToggle) onTetherToggle(clientIndex, cargoId);
+                break;
+            }
             default:
                 break;
         }
