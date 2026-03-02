@@ -16,7 +16,8 @@ int main(int argc, char* argv[]) {
     std::signal(SIGINT, signalHandler);
 
     uint16_t port = ssm::DEFAULT_PORT;
-    std::string mapFile = "assets/maps/station.map";
+    std::string mapFile;
+    uint32_t genSeed = 0;
 
     // Parse args
     for (int i = 1; i < argc; i++) {
@@ -25,6 +26,8 @@ int main(int argc, char* argv[]) {
             port = static_cast<uint16_t>(std::stoi(argv[++i]));
         } else if (arg == "--map" && i + 1 < argc) {
             mapFile = argv[++i];
+        } else if (arg == "--seed" && i + 1 < argc) {
+            genSeed = static_cast<uint32_t>(std::stoul(argv[++i]));
         }
     }
 
@@ -32,7 +35,15 @@ int main(int argc, char* argv[]) {
 
     // Initialize game world
     ssm::GameWorld world;
-    if (!world.init(mapFile)) {
+    bool initOk;
+    if (!mapFile.empty()) {
+        std::cout << "Loading map from file: " << mapFile << std::endl;
+        initOk = world.init(mapFile);
+    } else {
+        std::cout << "Generating random station..." << std::endl;
+        initOk = world.initGenerated(genSeed);
+    }
+    if (!initOk) {
         std::cerr << "Failed to initialize game world" << std::endl;
         return 1;
     }

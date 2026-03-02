@@ -47,6 +47,11 @@ private:
     // Station economy
     int32_t stationMoney = 0;
 
+    // Smooth camera
+    float cameraPosX = 0.0f;
+    float cameraPosY = 0.0f;
+    bool cameraInitialized = false;
+
     void clearGameObjects();
     Player* findLocalPlayer();
     void toggleEditMode();

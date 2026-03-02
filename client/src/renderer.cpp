@@ -308,6 +308,36 @@ void Renderer::renderObject(const GameObject* obj) {
     // Skip floor and wall - rendered by map
     if (obj->type == GameObjectType::WALL || obj->type == GameObjectType::FLOOR) return;
 
+    // Animated door rendering — split from center
+    if (obj->type == GameObjectType::DOOR) {
+        auto* door = static_cast<const Door*>(obj);
+        float doorR = 0.6f, doorG = 0.3f, doorB = 0.1f; // brown base
+        // Lerp toward green as it opens
+        float t = door->openAmount;
+        doorR = doorR * (1.0f - t) + 0.2f * t;
+        doorG = doorG * (1.0f - t) + 0.7f * t;
+        doorB = doorB * (1.0f - t) + 0.2f * t;
+
+        float slideOffset = t * (CELL_SIZE / 2.0f); // max slide = half cell
+
+        if (door->orientation == 0) {
+            // Walls on left+right → door splits horizontally (left half + right half)
+            float halfW = obj->width / 2.0f;
+            // Left half slides left
+            drawRect(obj->x - slideOffset, obj->y, halfW, obj->height, doorR, doorG, doorB);
+            // Right half slides right
+            drawRect(obj->x + halfW + slideOffset, obj->y, halfW, obj->height, doorR, doorG, doorB);
+        } else {
+            // Walls on up+down → door splits vertically (top half + bottom half)
+            float halfH = obj->height / 2.0f;
+            // Top half slides up
+            drawRect(obj->x, obj->y - slideOffset, obj->width, halfH, doorR, doorG, doorB);
+            // Bottom half slides down
+            drawRect(obj->x, obj->y + halfH + slideOffset, obj->width, halfH, doorR, doorG, doorB);
+        }
+        return;
+    }
+
     if (obj->type == GameObjectType::PLAYER) {
         auto* player = static_cast<const Player*>(obj);
         float cx = player->x + player->width / 2.0f;

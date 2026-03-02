@@ -20,12 +20,14 @@ public:
 class Door : public GameObject {
 public:
     DoorState state = DoorState::CLOSED;
+    float openAmount = 0.0f;    // 0.0 = fully closed, 1.0 = fully open
+    uint8_t orientation = 0;     // 0 = vertical door (walls left+right, opens horizontally)
+                                 // 1 = horizontal door (walls up+down, opens vertically)
 
     Door();
     Door(uint32_t id, float x, float y);
 
-    bool isSolid() const { return state == DoorState::CLOSED; }
-    void toggle() { state = (state == DoorState::CLOSED) ? DoorState::OPEN : DoorState::CLOSED; }
+    bool isSolid() const { return openAmount < 0.5f; }
 
     void serialize(ByteBuffer& buf) const override;
     void deserialize(ByteBuffer& buf) override;

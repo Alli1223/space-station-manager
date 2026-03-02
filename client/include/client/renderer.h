@@ -61,16 +61,29 @@ private:
     float cameraX = 0.0f;
     float cameraY = 0.0f;
 
-    // Shader program
-    GLuint shaderProgram = 0;
+    // Shader programs
+    GLuint shaderProgram = 0;       // uniform-color shader (legacy, circles)
+    GLuint batchShaderProgram = 0;  // per-vertex-color shader (batched rects)
     GLuint vao = 0;
     GLuint vbo = 0;
+    GLuint batchVao = 0;
+    GLuint batchVbo = 0;
     GLint uProjection = -1;
     GLint uColor = -1;
+    GLint uBatchProjection = -1;
+
+    // Batched drawing: accumulate quads with per-vertex color, flush in one call
+    // Each vertex: x, y, r, g, b, a (6 floats)
+    std::vector<float> batchVertices;
+    void batchRect(float x, float y, float w, float h, float r, float g, float b, float a = 1.0f);
+    void flushBatch();
 
     void drawRect(float x, float y, float w, float h, float r, float g, float b, float a = 1.0f);
     void drawCircle(float cx, float cy, float radius, float r, float g, float b);
     glm::vec4 getColorForObject(const GameObject* obj) const;
+
+    // Frustum culling helper
+    bool isOnScreen(float x, float y, float w, float h) const;
 
     // Objectives panel rendering
     void renderObjectivesPanel(const Ship* ship);

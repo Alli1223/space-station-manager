@@ -20,10 +20,14 @@ Door::Door(uint32_t id, float x, float y)
 void Door::serialize(ByteBuffer& buf) const {
     GameObject::serialize(buf);
     buf.writeU8(static_cast<uint8_t>(state));
+    buf.writeFloat(openAmount);
+    buf.writeU8(orientation);
 }
 void Door::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
     state = static_cast<DoorState>(buf.readU8());
+    openAmount = buf.readFloat();
+    orientation = buf.readU8();
 }
 
 // --- Terminal ---

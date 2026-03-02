@@ -15,6 +15,7 @@ public:
     ~GameWorld();
 
     bool init(const std::string& mapFile);
+    bool initGenerated(uint32_t seed = 0);
     void update(float dt);
 
     // Network event handlers

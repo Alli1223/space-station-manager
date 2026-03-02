@@ -85,8 +85,14 @@ bool GameClient::init(const std::string& host, uint16_t port, const std::string&
 
 void GameClient::run() {
     auto lastInputSend = std::chrono::steady_clock::now();
+    auto lastFrameTime = std::chrono::steady_clock::now();
 
     while (running && !glfwWindowShouldClose(renderer.getWindow())) {
+        // Compute frame delta time
+        auto frameNow = std::chrono::steady_clock::now();
+        float frameDt = std::chrono::duration<float>(frameNow - lastFrameTime).count();
+        if (frameDt > 0.1f) frameDt = 0.1f; // clamp to avoid huge jumps
+        lastFrameTime = frameNow;
         // Poll network
         network.poll();
         if (!network.isConnected()) {
@@ -194,13 +200,26 @@ void GameClient::run() {
             lastInputSend = now;
         }
 
-        // Update camera to follow local player
+        // Update camera to smoothly follow local player
         Player* localPlayer = findLocalPlayer();
         if (localPlayer) {
-            renderer.setCamera(
-                localPlayer->x + localPlayer->width / 2.0f,
-                localPlayer->y + localPlayer->height / 2.0f
-            );
+            float targetX = localPlayer->x + localPlayer->width / 2.0f;
+            float targetY = localPlayer->y + localPlayer->height / 2.0f;
+
+            if (!cameraInitialized) {
+                // Snap on first frame
+                cameraPosX = targetX;
+                cameraPosY = targetY;
+                cameraInitialized = true;
+            } else {
+                // Smooth exponential lerp — higher = snappier, lower = smoother
+                constexpr float CAMERA_SMOOTHING = 6.0f;
+                float lerpFactor = 1.0f - std::exp(-CAMERA_SMOOTHING * frameDt);
+                cameraPosX += (targetX - cameraPosX) * lerpFactor;
+                cameraPosY += (targetY - cameraPosY) * lerpFactor;
+            }
+
+            renderer.setCamera(cameraPosX, cameraPosY);
         }
 
         // --- Render ---

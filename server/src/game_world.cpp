@@ -1,4 +1,5 @@
 #include "server/game_world.h"
+#include "shared/station_generator.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -35,6 +36,32 @@ bool GameWorld::init(const std::string& mapFile) {
     return true;
 }
 
+bool GameWorld::initGenerated(uint32_t seed) {
+    StationGenerator generator;
+    if (!generator.generate(map, seed)) {
+        std::cerr << "Failed to generate station" << std::endl;
+        return false;
+    }
+
+    buildMapObjects();
+
+    // Initialize ship manager with docking collars
+    auto collars = findObjectsOfType<DockingCollar>();
+    shipManager.init(collars, [this]() { return generateId(); });
+
+    // Wire economy callback
+    shipManager.onMoneyChange = [this](int32_t delta, bool happy) {
+        stationMoney += delta;
+        std::cout << "[SERVER] Ship departed (" << (happy ? "happy" : "angry")
+                  << "), money delta: " << (delta >= 0 ? "+" : "") << delta
+                  << ", total: " << stationMoney << std::endl;
+    };
+
+    std::cout << "World initialized (generated) with " << objects.size()
+              << " objects, starting money: " << stationMoney << std::endl;
+    return true;
+}
+
 void GameWorld::buildMapObjects() {
     // First pass: create doors and remember positions for terminal linking
     struct DoorInfo {
@@ -68,6 +95,16 @@ void GameWorld::buildMapObjects() {
                     auto* floor = new Floor(generateId(), wx, wy);
                     objects.push_back(floor);
                     auto* door = new Door(generateId(), wx, wy);
+                    // Determine orientation from neighboring walls
+                    CellType left  = map.getCell(lx - 1, ly);
+                    CellType right = map.getCell(lx + 1, ly);
+                    CellType up    = map.getCell(lx, ly - 1);
+                    CellType down  = map.getCell(lx, ly + 1);
+                    bool wallsLR = (left == CellType::WALL && right == CellType::WALL);
+                    bool wallsUD = (up == CellType::WALL && down == CellType::WALL);
+                    // orientation 0 = walls on left+right → opens horizontally (splits left/right)
+                    // orientation 1 = walls on up+down → opens vertically (splits up/down)
+                    door->orientation = wallsUD ? 1 : 0;
                     objects.push_back(door);
                     doorInfos.push_back({door, lx, ly});
                     break;
@@ -353,6 +390,47 @@ void GameWorld::update(float dt) {
         }
     }
 
+    // Auto-open/close doors based on player proximity
+    {
+        constexpr float DOOR_OPEN_RANGE = 48.0f; // pixels — slightly more than 1 cell
+        constexpr float DOOR_ANIM_SPEED = 5.0f;  // 0→1 in 0.2s
+
+        for (auto* obj : objects) {
+            if (obj->type != GameObjectType::DOOR || !obj->active) continue;
+            auto* door = static_cast<Door*>(obj);
+
+            float doorCX = door->x + door->width / 2.0f;
+            float doorCY = door->y + door->height / 2.0f;
+
+            // Check if any player is near this door
+            bool playerNearby = false;
+            for (auto& [idx, player] : playersByClientIndex) {
+                if (!player->active) continue;
+                float pcx = player->x + player->width / 2.0f;
+                float pcy = player->y + player->height / 2.0f;
+                float ddx = pcx - doorCX;
+                float ddy = pcy - doorCY;
+                if (ddx * ddx + ddy * ddy < DOOR_OPEN_RANGE * DOOR_OPEN_RANGE) {
+                    playerNearby = true;
+                    break;
+                }
+            }
+
+            // Set target state and animate
+            if (playerNearby) {
+                door->state = DoorState::OPEN;
+                door->openAmount += DOOR_ANIM_SPEED * dt;
+                if (door->openAmount > 1.0f) door->openAmount = 1.0f;
+            } else {
+                door->openAmount -= DOOR_ANIM_SPEED * dt;
+                if (door->openAmount < 0.0f) {
+                    door->openAmount = 0.0f;
+                    door->state = DoorState::CLOSED;
+                }
+            }
+        }
+    }
+
     // Update ships
     shipManager.update(dt, objects);
 
@@ -518,17 +596,8 @@ void GameWorld::handleInteraction(Player* player) {
 }
 
 void GameWorld::handleTerminalUse(Player* player, Terminal* terminal) {
-    // Find the linked door and toggle it
-    for (auto* obj : objects) {
-        if (obj->id == terminal->linkedDoorId && obj->type == GameObjectType::DOOR) {
-            auto* door = static_cast<Door*>(obj);
-            door->toggle();
-            std::cout << "[SERVER] Player '" << player->name << "' toggled door " << door->id
-                      << " via terminal " << terminal->id
-                      << " to " << (door->isSolid() ? "CLOSED" : "OPEN") << std::endl;
-            break;
-        }
-    }
+    // Doors now open automatically — terminals are decorative consoles only
+    std::cout << "[SERVER] Player '" << player->name << "' used terminal " << terminal->id << std::endl;
 }
 
 void GameWorld::handleCargoPickup(Player* player) {
@@ -928,6 +997,12 @@ void GameWorld::rebuildCellObjects(int16_t gridX, int16_t gridY, CellType oldTyp
             auto* floor = new Floor(generateId(), wx, wy);
             objects.push_back(floor);
             auto* door = new Door(generateId(), wx, wy);
+            // Determine orientation from neighboring walls
+            CellType leftC  = map.getCell(gridX - 1, gridY);
+            CellType rightC = map.getCell(gridX + 1, gridY);
+            CellType upC    = map.getCell(gridX, gridY - 1);
+            CellType downC  = map.getCell(gridX, gridY + 1);
+            door->orientation = (upC == CellType::WALL && downC == CellType::WALL) ? 1 : 0;
             objects.push_back(door);
             break;
         }
