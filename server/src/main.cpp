@@ -68,8 +68,8 @@ int main(int argc, char* argv[]) {
         }
     };
 
-    network.onInput = [&](uint32_t clientIndex, float dx, float dy, bool interact) {
-        world.onPlayerInput(clientIndex, dx, dy, interact);
+    network.onInput = [&](uint32_t clientIndex, float dx, float dy, bool interact, bool sprint) {
+        world.onPlayerInput(clientIndex, dx, dy, interact, sprint);
     };
 
     network.onDisconnect = [&](uint32_t clientIndex) {

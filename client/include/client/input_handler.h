@@ -12,6 +12,7 @@ public:
     float getMoveY() const { return moveY; }
     bool isInteracting() const { return interact; }
     bool wasInteractPressed() const { return interactPressed; }
+    bool isSprinting() const { return sprintHeld; }
 
     // Mouse state
     float getMouseX() const { return mouseX; }
@@ -43,6 +44,9 @@ private:
     bool rightClickPressed = false;
     bool prevLeftDown = false;
     bool prevRightDown = false;
+
+    // Sprint
+    bool sprintHeld = false;
 
     // Edit toggle
     bool editTogglePressed = false;

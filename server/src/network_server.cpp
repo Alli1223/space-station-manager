@@ -160,7 +160,8 @@ void NetworkServer::processMessages(uint32_t clientIndex) {
                 float dx = payload.readFloat();
                 float dy = payload.readFloat();
                 bool interact = payload.readBool();
-                if (onInput) onInput(clientIndex, dx, dy, interact);
+                bool sprint = payload.remaining() > 0 ? payload.readBool() : false;
+                if (onInput) onInput(clientIndex, dx, dy, interact, sprint);
                 break;
             }
             case MessageType::MSG_CELL_EDIT: {

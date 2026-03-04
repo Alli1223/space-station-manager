@@ -43,7 +43,7 @@ public:
     void poll();
 
     void sendJoin(const std::string& playerName);
-    void sendInput(float dx, float dy, bool interact);
+    void sendInput(float dx, float dy, bool interact, bool sprint = false);
     void sendCellEdit(int16_t gridX, int16_t gridY, CellType cellType);
     void sendCargoPlace(float targetX, float targetY);
     void sendTetherToggle(uint32_t cargoId);

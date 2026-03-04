@@ -2,8 +2,17 @@
 #include <iostream>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 
 namespace ssm {
+
+// --- Client-side interpolation state ---
+struct InterpState {
+    float prevX, prevY;   // position at previous server tick
+    float targetX, targetY; // position at latest server tick
+};
+static std::unordered_map<uint32_t, InterpState> interpMap;
+static float interpAlpha = 0.0f; // 0..1 between prev and target tick
 
 GameClient::~GameClient() {
     clearGameObjects();
@@ -48,6 +57,24 @@ bool GameClient::init(const std::string& host, uint16_t port, const std::string&
     };
 
     network.onState = [this](const std::vector<GameObject*>& objects) {
+        // Before replacing, snapshot current positions as "previous" for interpolation
+        // and new positions as "target"
+        for (auto* newObj : objects) {
+            auto it = interpMap.find(newObj->id);
+            if (it != interpMap.end()) {
+                // Move the old target to prev, set new target
+                it->second.prevX = it->second.targetX;
+                it->second.prevY = it->second.targetY;
+                it->second.targetX = newObj->x;
+                it->second.targetY = newObj->y;
+            } else {
+                // First time seeing this object — snap (no interpolation)
+                interpMap[newObj->id] = { newObj->x, newObj->y, newObj->x, newObj->y };
+            }
+        }
+        // Reset interpolation alpha — we just received a new tick
+        interpAlpha = 0.0f;
+
         clearGameObjects();
         gameObjects = objects; // take ownership
     };
@@ -195,9 +222,34 @@ void GameClient::run() {
             if (pendingInteract) {
                 std::cout << "[CLIENT] Sending interact to server" << std::endl;
             }
-            network.sendInput(input.getMoveX(), input.getMoveY(), pendingInteract);
+            network.sendInput(input.getMoveX(), input.getMoveY(), pendingInteract, input.isSprinting());
             pendingInteract = false;
             lastInputSend = now;
+        }
+
+        // Advance interpolation alpha (0→1 over one server tick interval)
+        interpAlpha += frameDt / SERVER_TICK_INTERVAL;
+        if (interpAlpha > 1.0f) interpAlpha = 1.0f;
+
+        // Apply interpolated positions to all dynamic game objects
+        for (auto* obj : gameObjects) {
+            if (obj->type == GameObjectType::WALL || obj->type == GameObjectType::FLOOR) continue;
+            auto it = interpMap.find(obj->id);
+            if (it != interpMap.end()) {
+                const auto& s = it->second;
+                obj->x = s.prevX + (s.targetX - s.prevX) * interpAlpha;
+                obj->y = s.prevY + (s.targetY - s.prevY) * interpAlpha;
+            }
+        }
+
+        // Clean up stale entries from interpMap (objects that no longer exist)
+        if (interpMap.size() > gameObjects.size() * 2) {
+            std::unordered_map<uint32_t, InterpState> cleaned;
+            for (auto* obj : gameObjects) {
+                auto it = interpMap.find(obj->id);
+                if (it != interpMap.end()) cleaned[obj->id] = it->second;
+            }
+            interpMap = std::move(cleaned);
         }
 
         // Update camera to smoothly follow local player

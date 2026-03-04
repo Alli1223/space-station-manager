@@ -22,6 +22,9 @@ void InputHandler::update(GLFWwindow* window) {
     interact = interactPressed;
     prevInteract = currentInteract;
 
+    // Sprint (Left Shift)
+    sprintHeld = (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS);
+
     // Mouse position
     double mx, my;
     glfwGetCursorPos(window, &mx, &my);

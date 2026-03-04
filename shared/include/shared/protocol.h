@@ -45,7 +45,7 @@ bool decodeMessage(std::vector<uint8_t>& incoming, MessageType& outType, ByteBuf
 
 // Client -> Server
 ByteBuffer buildJoinMessage(const std::string& playerName);
-ByteBuffer buildInputMessage(float dx, float dy, bool interact);
+ByteBuffer buildInputMessage(float dx, float dy, bool interact, bool sprint = false);
 ByteBuffer buildCellEditMessage(int16_t gridX, int16_t gridY, CellType cellType);
 ByteBuffer buildCargoPlaceMessage(float targetX, float targetY);
 ByteBuffer buildTetherToggleMessage(uint32_t cargoId);

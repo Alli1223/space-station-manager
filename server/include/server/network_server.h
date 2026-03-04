@@ -33,7 +33,7 @@ struct ClientConnection {
 class NetworkServer {
 public:
     using JoinCallback = std::function<void(uint32_t clientIndex, const std::string& name)>;
-    using InputCallback = std::function<void(uint32_t clientIndex, float dx, float dy, bool interact)>;
+    using InputCallback = std::function<void(uint32_t clientIndex, float dx, float dy, bool interact, bool sprint)>;
     using DisconnectCallback = std::function<void(uint32_t clientIndex)>;
     using CellEditCallback = std::function<void(uint32_t clientIndex, int16_t gridX, int16_t gridY, CellType cellType)>;
     using CargoPlaceCallback = std::function<void(uint32_t clientIndex, float targetX, float targetY)>;

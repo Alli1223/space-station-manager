@@ -159,9 +159,9 @@ void NetworkClient::sendJoin(const std::string& playerName) {
 #endif
 }
 
-void NetworkClient::sendInput(float dx, float dy, bool interact) {
+void NetworkClient::sendInput(float dx, float dy, bool interact, bool sprint) {
     if (!connected) return;
-    auto payload = buildInputMessage(dx, dy, interact);
+    auto payload = buildInputMessage(dx, dy, interact, sprint);
     auto encoded = encodeMessage(MessageType::MSG_INPUT, payload);
 #ifdef _WIN32
     send(sock, (const char*)encoded.data(), static_cast<int>(encoded.size()), 0);

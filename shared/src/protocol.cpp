@@ -33,11 +33,12 @@ ByteBuffer buildJoinMessage(const std::string& playerName) {
     return buf;
 }
 
-ByteBuffer buildInputMessage(float dx, float dy, bool interact) {
+ByteBuffer buildInputMessage(float dx, float dy, bool interact, bool sprint) {
     ByteBuffer buf;
     buf.writeFloat(dx);
     buf.writeFloat(dy);
     buf.writeBool(interact);
+    buf.writeBool(sprint);
     return buf;
 }
 

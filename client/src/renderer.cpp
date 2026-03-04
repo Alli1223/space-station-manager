@@ -8,6 +8,7 @@
 
 namespace ssm {
 
+// Legacy uniform-color shader (used for circles only)
 static const char* vertexShaderSrc = R"(
 #version 330 core
 layout(location = 0) in vec2 aPos;
@@ -25,6 +26,57 @@ void main() {
     FragColor = uColor;
 }
 )";
+
+// Per-vertex-color shader (used for all batched rects)
+static const char* batchVertexShaderSrc = R"(
+#version 330 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec4 aColor;
+uniform mat4 uProjection;
+out vec4 vColor;
+void main() {
+    gl_Position = uProjection * vec4(aPos, 0.0, 1.0);
+    vColor = aColor;
+}
+)";
+
+static const char* batchFragmentShaderSrc = R"(
+#version 330 core
+in vec4 vColor;
+out vec4 FragColor;
+void main() {
+    FragColor = vColor;
+}
+)";
+
+static GLuint compileShader(GLenum type, const char* src) {
+    GLuint s = glCreateShader(type);
+    glShaderSource(s, 1, &src, nullptr);
+    glCompileShader(s);
+    int ok;
+    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetShaderInfoLog(s, 512, nullptr, log);
+        std::cerr << "Shader compile error: " << log << std::endl;
+    }
+    return s;
+}
+
+static GLuint linkProgram(GLuint vs, GLuint fs) {
+    GLuint prog = glCreateProgram();
+    glAttachShader(prog, vs);
+    glAttachShader(prog, fs);
+    glLinkProgram(prog);
+    int ok;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        char log[512];
+        glGetProgramInfoLog(prog, 512, nullptr, log);
+        std::cerr << "Shader link error: " << log << std::endl;
+    }
+    return prog;
+}
 
 bool Renderer::init(int w, int h) {
     windowWidth = w;
@@ -59,7 +111,7 @@ bool Renderer::init(int w, int h) {
 
     if (!createShaders()) return false;
 
-    // Setup VAO/VBO for quads
+    // Legacy VAO/VBO (circles only)
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
     glBindVertexArray(vao);
@@ -68,6 +120,22 @@ bool Renderer::init(int w, int h) {
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
 
+    // Batched VAO/VBO (per-vertex color: x, y, r, g, b, a = 6 floats per vertex)
+    glGenVertexArrays(1, &batchVao);
+    glGenBuffers(1, &batchVbo);
+    glBindVertexArray(batchVao);
+    glBindBuffer(GL_ARRAY_BUFFER, batchVbo);
+    glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
+    // Position: location 0, 2 floats, stride 6 floats, offset 0
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    // Color: location 1, 4 floats, stride 6 floats, offset 2 floats
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+
+    // Reserve batch capacity
+    batchVertices.reserve(6000 * 6); // ~1000 quads initial
+
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -75,54 +143,37 @@ bool Renderer::init(int w, int h) {
 }
 
 bool Renderer::createShaders() {
-    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vs, 1, &vertexShaderSrc, nullptr);
-    glCompileShader(vs);
-    int success;
-    glGetShaderiv(vs, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char log[512];
-        glGetShaderInfoLog(vs, 512, nullptr, log);
-        std::cerr << "Vertex shader error: " << log << std::endl;
-        return false;
+    // Legacy uniform-color shader
+    {
+        GLuint vs = compileShader(GL_VERTEX_SHADER, vertexShaderSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSrc);
+        shaderProgram = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        uProjection = glGetUniformLocation(shaderProgram, "uProjection");
+        uColor = glGetUniformLocation(shaderProgram, "uColor");
     }
 
-    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fs, 1, &fragmentShaderSrc, nullptr);
-    glCompileShader(fs);
-    glGetShaderiv(fs, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char log[512];
-        glGetShaderInfoLog(fs, 512, nullptr, log);
-        std::cerr << "Fragment shader error: " << log << std::endl;
-        return false;
+    // Batched per-vertex-color shader
+    {
+        GLuint vs = compileShader(GL_VERTEX_SHADER, batchVertexShaderSrc);
+        GLuint fs = compileShader(GL_FRAGMENT_SHADER, batchFragmentShaderSrc);
+        batchShaderProgram = linkProgram(vs, fs);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+        uBatchProjection = glGetUniformLocation(batchShaderProgram, "uProjection");
     }
-
-    shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vs);
-    glAttachShader(shaderProgram, fs);
-    glLinkProgram(shaderProgram);
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-    if (!success) {
-        char log[512];
-        glGetProgramInfoLog(shaderProgram, 512, nullptr, log);
-        std::cerr << "Shader link error: " << log << std::endl;
-        return false;
-    }
-
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    uProjection = glGetUniformLocation(shaderProgram, "uProjection");
-    uColor = glGetUniformLocation(shaderProgram, "uColor");
 
     return true;
 }
 
 void Renderer::shutdown() {
     if (shaderProgram) glDeleteProgram(shaderProgram);
+    if (batchShaderProgram) glDeleteProgram(batchShaderProgram);
     if (vao) glDeleteVertexArrays(1, &vao);
     if (vbo) glDeleteBuffers(1, &vbo);
+    if (batchVao) glDeleteVertexArrays(1, &batchVao);
+    if (batchVbo) glDeleteBuffers(1, &batchVbo);
     if (window) {
         glfwDestroyWindow(window);
         window = nullptr;
@@ -136,9 +187,7 @@ void Renderer::beginFrame() {
     glClearColor(0.05f, 0.05f, 0.1f, 1.0f); // dark space background
     glClear(GL_COLOR_BUFFER_BIT);
 
-    glUseProgram(shaderProgram);
-
-    // Orthographic projection centered on camera
+    // Set projection on both shaders
     glm::mat4 proj = glm::ortho(
         cameraX - windowWidth / 2.0f,
         cameraX + windowWidth / 2.0f,
@@ -146,7 +195,14 @@ void Renderer::beginFrame() {
         cameraY - windowHeight / 2.0f,
         -1.0f, 1.0f
     );
+
+    glUseProgram(shaderProgram);
     glUniformMatrix4fv(uProjection, 1, GL_FALSE, glm::value_ptr(proj));
+
+    glUseProgram(batchShaderProgram);
+    glUniformMatrix4fv(uBatchProjection, 1, GL_FALSE, glm::value_ptr(proj));
+
+    batchVertices.clear();
 }
 
 void Renderer::endFrame() {
@@ -159,37 +215,59 @@ void Renderer::setCamera(float x, float y) {
     cameraY = y;
 }
 
-void Renderer::drawRect(float x, float y, float w, float h, float r, float g, float b, float a) {
-    float vertices[] = {
-        x, y,
-        x + w, y,
-        x + w, y + h,
-        x, y,
-        x + w, y + h,
-        x, y + h,
-    };
+// =========================================================================
+// Batched rect drawing — accumulate quads, flush once
+// =========================================================================
 
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
-    glUniform4f(uColor, r, g, b, a);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
+void Renderer::batchRect(float x, float y, float w, float h, float r, float g, float b, float a) {
+    // 6 vertices per quad, 6 floats per vertex (x, y, r, g, b, a)
+    float v[] = {
+        x,     y,     r, g, b, a,
+        x + w, y,     r, g, b, a,
+        x + w, y + h, r, g, b, a,
+        x,     y,     r, g, b, a,
+        x + w, y + h, r, g, b, a,
+        x,     y + h, r, g, b, a,
+    };
+    batchVertices.insert(batchVertices.end(), v, v + 36);
+}
+
+void Renderer::flushBatch() {
+    if (batchVertices.empty()) return;
+
+    glUseProgram(batchShaderProgram);
+    glBindVertexArray(batchVao);
+    glBindBuffer(GL_ARRAY_BUFFER, batchVbo);
+    glBufferData(GL_ARRAY_BUFFER,
+                 batchVertices.size() * sizeof(float),
+                 batchVertices.data(), GL_DYNAMIC_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(batchVertices.size() / 6));
+
+    batchVertices.clear();
+}
+
+// Legacy single-rect draw (used only for drawWorldRect/drawUIRect/drawUIOutline)
+void Renderer::drawRect(float x, float y, float w, float h, float r, float g, float b, float a) {
+    batchRect(x, y, w, h, r, g, b, a);
+    flushBatch();
 }
 
 void Renderer::drawCircle(float cx, float cy, float radius, float r, float g, float b) {
+    // Must flush any pending batch first, then switch to legacy shader
+    flushBatch();
+
     const int segments = 20;
     float vertices[(segments + 2) * 2];
 
-    // Center vertex
     vertices[0] = cx;
     vertices[1] = cy;
-
     for (int i = 0; i <= segments; i++) {
         float angle = 2.0f * 3.14159f * i / segments;
         vertices[(i + 1) * 2] = cx + radius * std::cos(angle);
         vertices[(i + 1) * 2 + 1] = cy + radius * std::sin(angle);
     }
 
+    glUseProgram(shaderProgram);
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_DYNAMIC_DRAW);
@@ -197,28 +275,25 @@ void Renderer::drawCircle(float cx, float cy, float radius, float r, float g, fl
     glDrawArrays(GL_TRIANGLE_FAN, 0, segments + 2);
 }
 
+// =========================================================================
+// Frustum culling helper
+// =========================================================================
+
+bool Renderer::isOnScreen(float x, float y, float w, float h) const {
+    float halfW = windowWidth / 2.0f;
+    float halfH = windowHeight / 2.0f;
+    return !(x + w < cameraX - halfW || x > cameraX + halfW ||
+             y + h < cameraY - halfH || y > cameraY + halfH);
+}
+
+// =========================================================================
+// Map rendering — fully batched
+// =========================================================================
+
 void Renderer::renderMap(const StationMap& map) {
-    // Batch tiles by color to minimize draw calls
-    // Each visible tile = 6 vertices (2 triangles), 2 floats per vertex = 12 floats per tile
-    struct ColorBatch {
-        float r, g, b;
-        std::vector<float> vertices;
-        void addQuad(float x, float y, float w, float h) {
-            float v[] = { x,y, x+w,y, x+w,y+h, x,y, x+w,y+h, x,y+h };
-            vertices.insert(vertices.end(), v, v + 12);
-        }
-    };
-
-    ColorBatch wallBatch    {0.3f, 0.3f, 0.35f, {}};
-    ColorBatch floorBatch   {0.6f, 0.6f, 0.65f, {}};
-    ColorBatch airlockBatch {0.5f, 0.55f, 0.6f, {}};
-    ColorBatch storageBatch {0.55f, 0.6f, 0.55f, {}};
-    ColorBatch collarBatch  {0.8f, 0.5f, 0.2f, {}};
-
     float halfW = windowWidth / 2.0f;
     float halfH = windowHeight / 2.0f;
 
-    // Iterate using logical/world grid coordinates (origin-aware)
     for (int ly = map.originY; ly < map.originY + map.height; ly++) {
         for (int lx = map.originX; lx < map.originX + map.width; lx++) {
             float wx = lx * CELL_SIZE;
@@ -235,40 +310,24 @@ void Renderer::renderMap(const StationMap& map) {
             CellType cell = map.getCell(lx, ly);
             switch (cell) {
                 case CellType::WALL:
-                    wallBatch.addQuad(wx, wy, CELL_SIZE, CELL_SIZE); break;
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.3f, 0.3f, 0.35f); break;
                 case CellType::FLOOR:
                 case CellType::SPAWN_POINT:
                 case CellType::DOOR:
                 case CellType::TERMINAL:
-                    floorBatch.addQuad(wx, wy, CELL_SIZE, CELL_SIZE); break;
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.6f, 0.6f, 0.65f); break;
                 case CellType::AIRLOCK:
-                    airlockBatch.addQuad(wx, wy, CELL_SIZE, CELL_SIZE); break;
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.5f, 0.55f, 0.6f); break;
                 case CellType::STORAGE:
-                    storageBatch.addQuad(wx, wy, CELL_SIZE, CELL_SIZE); break;
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.55f, 0.6f, 0.55f); break;
                 case CellType::DOCKING_COLLAR:
-                    collarBatch.addQuad(wx, wy, CELL_SIZE, CELL_SIZE); break;
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.8f, 0.5f, 0.2f); break;
                 default: break;
             }
         }
     }
 
-    // Draw each batch in one call
-    auto drawBatch = [&](const ColorBatch& batch) {
-        if (batch.vertices.empty()) return;
-        glBindVertexArray(vao);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER,
-                     batch.vertices.size() * sizeof(float),
-                     batch.vertices.data(), GL_DYNAMIC_DRAW);
-        glUniform4f(uColor, batch.r, batch.g, batch.b, 1.0f);
-        glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(batch.vertices.size() / 2));
-    };
-
-    drawBatch(floorBatch);
-    drawBatch(wallBatch);
-    drawBatch(airlockBatch);
-    drawBatch(storageBatch);
-    drawBatch(collarBatch);
+    flushBatch();
 }
 
 glm::vec4 Renderer::getColorForObject(const GameObject* obj) const {
@@ -276,20 +335,20 @@ glm::vec4 Renderer::getColorForObject(const GameObject* obj) const {
         case GameObjectType::DOOR: {
             auto* door = static_cast<const Door*>(obj);
             if (door->state == DoorState::OPEN)
-                return {0.2f, 0.7f, 0.2f, 1.0f}; // green when open
+                return {0.2f, 0.7f, 0.2f, 1.0f};
             else
-                return {0.6f, 0.3f, 0.1f, 1.0f}; // brown when closed
+                return {0.6f, 0.3f, 0.1f, 1.0f};
         }
         case GameObjectType::TERMINAL:
-            return {0.2f, 0.4f, 0.9f, 1.0f}; // blue
+            return {0.2f, 0.4f, 0.9f, 1.0f};
         case GameObjectType::DOCKING_COLLAR:
-            return {0.9f, 0.6f, 0.1f, 1.0f}; // orange
+            return {0.9f, 0.6f, 0.1f, 1.0f};
         case GameObjectType::SHIP: {
             auto* ship = static_cast<const Ship*>(obj);
             switch (ship->shipClass) {
-                case ShipClass::SMALL:  return {0.85f, 0.9f, 0.95f, 1.0f};  // light blue-white
-                case ShipClass::MEDIUM: return {0.9f, 0.9f, 0.95f, 1.0f};   // white
-                case ShipClass::LARGE:  return {0.95f, 0.88f, 0.85f, 1.0f}; // warm cream
+                case ShipClass::SMALL:  return {0.85f, 0.9f, 0.95f, 1.0f};
+                case ShipClass::MEDIUM: return {0.9f, 0.9f, 0.95f, 1.0f};
+                case ShipClass::LARGE:  return {0.95f, 0.88f, 0.85f, 1.0f};
                 default:                return {0.9f, 0.9f, 0.95f, 1.0f};
             }
         }
@@ -302,51 +361,59 @@ glm::vec4 Renderer::getColorForObject(const GameObject* obj) const {
     }
 }
 
+// =========================================================================
+// Object rendering — batched with frustum culling
+// =========================================================================
+
 void Renderer::renderObject(const GameObject* obj) {
     if (!obj->active) return;
-
-    // Skip floor and wall - rendered by map
     if (obj->type == GameObjectType::WALL || obj->type == GameObjectType::FLOOR) return;
 
     // Animated door rendering — split from center
     if (obj->type == GameObjectType::DOOR) {
         auto* door = static_cast<const Door*>(obj);
-        float doorR = 0.6f, doorG = 0.3f, doorB = 0.1f; // brown base
-        // Lerp toward green as it opens
-        float t = door->openAmount;
-        doorR = doorR * (1.0f - t) + 0.2f * t;
-        doorG = doorG * (1.0f - t) + 0.7f * t;
-        doorB = doorB * (1.0f - t) + 0.2f * t;
+        if (!isOnScreen(obj->x - CELL_SIZE, obj->y - CELL_SIZE, obj->width + 2 * CELL_SIZE, obj->height + 2 * CELL_SIZE)) return;
 
-        float slideOffset = t * (CELL_SIZE / 2.0f); // max slide = half cell
+        float t = door->openAmount;
+        float doorR, doorG, doorB;
+        if (door->isAirlock) {
+            // Airlock doors: red-orange when closed, green when open
+            doorR = 0.8f * (1.0f - t) + 0.2f * t;
+            doorG = 0.25f * (1.0f - t) + 0.7f * t;
+            doorB = 0.15f * (1.0f - t) + 0.2f * t;
+        } else {
+            // Regular doors: brown when closed, green when open
+            doorR = 0.6f * (1.0f - t) + 0.2f * t;
+            doorG = 0.3f * (1.0f - t) + 0.7f * t;
+            doorB = 0.1f * (1.0f - t) + 0.2f * t;
+        }
+
+        float slideOffset = t * (CELL_SIZE / 2.0f);
 
         if (door->orientation == 0) {
-            // Walls on left+right → door splits horizontally (left half + right half)
             float halfW = obj->width / 2.0f;
-            // Left half slides left
-            drawRect(obj->x - slideOffset, obj->y, halfW, obj->height, doorR, doorG, doorB);
-            // Right half slides right
-            drawRect(obj->x + halfW + slideOffset, obj->y, halfW, obj->height, doorR, doorG, doorB);
+            batchRect(obj->x - slideOffset, obj->y, halfW, obj->height, doorR, doorG, doorB);
+            batchRect(obj->x + halfW + slideOffset, obj->y, halfW, obj->height, doorR, doorG, doorB);
         } else {
-            // Walls on up+down → door splits vertically (top half + bottom half)
             float halfH = obj->height / 2.0f;
-            // Top half slides up
-            drawRect(obj->x, obj->y - slideOffset, obj->width, halfH, doorR, doorG, doorB);
-            // Bottom half slides down
-            drawRect(obj->x, obj->y + halfH + slideOffset, obj->width, halfH, doorR, doorG, doorB);
+            batchRect(obj->x, obj->y - slideOffset, obj->width, halfH, doorR, doorG, doorB);
+            batchRect(obj->x, obj->y + halfH + slideOffset, obj->width, halfH, doorR, doorG, doorB);
         }
         return;
     }
 
     if (obj->type == GameObjectType::PLAYER) {
         auto* player = static_cast<const Player*>(obj);
+        if (!isOnScreen(obj->x, obj->y, obj->width, obj->height)) return;
+
+        // Flush batch before switching to circle shader
+        flushBatch();
+
         float cx = player->x + player->width / 2.0f;
         float cy = player->y + player->height / 2.0f;
-        // Use player's assigned color
         uint8_t ci = player->colorIndex % 8;
         drawCircle(cx, cy, player->width / 2.0f,
                    PLAYER_COLORS[ci][0], PLAYER_COLORS[ci][1], PLAYER_COLORS[ci][2]);
-        // Draw a small indicator if carrying cargo
         if (player->isCarrying()) {
             drawCircle(cx, cy - player->height / 2.0f - 4.0f, 4.0f, 1.0f, 1.0f, 0.0f);
         }
@@ -355,45 +422,61 @@ void Renderer::renderObject(const GameObject* obj) {
 
     if (obj->type == GameObjectType::SHIP) {
         auto* ship = static_cast<const Ship*>(obj);
+        if (!isOnScreen(obj->x, obj->y, obj->width, obj->height)) return;
+
         glm::vec4 color = getColorForObject(obj);
-        drawRect(obj->x, obj->y, obj->width, obj->height, color.r, color.g, color.b, color.a);
-        // Draw dark interior for docked ships (accessible through open bottom)
+        batchRect(obj->x, obj->y, obj->width, obj->height, color.r, color.g, color.b, color.a);
         if (ship->state == ShipState::DOCKING || ship->state == ShipState::UNLOADING ||
             ship->state == ShipState::WAITING_RESUPPLY) {
             float wallT = 4.0f;
-            drawRect(ship->x + wallT, ship->y + wallT,
+            batchRect(ship->x + wallT, ship->y + wallT,
                      ship->width - 2.0f * wallT, ship->height - wallT,
                      0.12f, 0.12f, 0.18f, 0.9f);
         }
         return;
     }
 
+    // Generic objects (terminals, collars, cargo)
+    if (!isOnScreen(obj->x, obj->y, obj->width, obj->height)) return;
     glm::vec4 color = getColorForObject(obj);
-    drawRect(obj->x, obj->y, obj->width, obj->height, color.r, color.g, color.b, color.a);
+    batchRect(obj->x, obj->y, obj->width, obj->height, color.r, color.g, color.b, color.a);
 }
 
 void Renderer::renderObjects(const std::vector<GameObject*>& objects) {
-    // Render in order: doors, terminals, cargo, ships, players (so players draw on top)
+    // Render in order: doors, terminals/collars, ships, cargo, players
+    // Batch all rects together and flush between layers that need different draw modes
+
+    // Layer 1: Doors (all batched rects)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::DOOR) renderObject(obj);
     }
+
+    // Layer 2: Terminals + collars (batched rects)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::TERMINAL || obj->type == GameObjectType::DOCKING_COLLAR)
             renderObject(obj);
     }
+
+    // Layer 3: Ships (batched rects)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::SHIP) renderObject(obj);
     }
+
+    // Layer 4: Cargo (batched rects)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::CARGO) renderObject(obj);
     }
+
+    // Flush all accumulated rects before drawing circles
+    flushBatch();
+
+    // Layer 5: Players (circles — each is an individual draw call, but there are few)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::PLAYER) renderObject(obj);
     }
 }
 
 void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject*>& objects, int32_t stationMoney) {
-    // Switch to screen-space projection for HUD
     beginScreenSpace();
 
     if (!localPlayer) {
@@ -401,51 +484,70 @@ void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject
         return;
     }
 
-    // Show carrying status — small swatch in top-left
+    // Show carrying status
     if (localPlayer->isCarrying()) {
-        drawRect(2.0f, 2.0f, 26.0f, 26.0f, 0.1f, 0.1f, 0.15f, 0.8f);
+        batchRect(2.0f, 2.0f, 26.0f, 26.0f, 0.1f, 0.1f, 0.15f, 0.8f);
         for (auto* obj : objects) {
             if (obj->id == localPlayer->carryingCargoId && obj->type == GameObjectType::CARGO) {
                 auto* cargo = static_cast<const Cargo*>(obj);
                 glm::vec4 cc = getColorForObject(cargo);
-                drawRect(5.0f, 5.0f, 20.0f, 20.0f, cc.r, cc.g, cc.b);
+                batchRect(5.0f, 5.0f, 20.0f, 20.0f, cc.r, cc.g, cc.b);
                 break;
             }
         }
     }
 
-    // === Money display (top-left, below carrying indicator) ===
+    // Money display
     {
         float moneyY = 34.0f;
-        // Coin icon (yellow circle approximated as square)
-        drawRect(4.0f, moneyY, 12.0f, 12.0f, 1.0f, 0.85f, 0.2f);
+        batchRect(4.0f, moneyY, 12.0f, 12.0f, 1.0f, 0.85f, 0.2f);
 
-        // Money bar: 1px per 10 money, capped at 200px visual width
         float barX = 20.0f;
         float barW = std::min(static_cast<float>(std::abs(stationMoney)) / 10.0f, 200.0f);
         float barH = 8.0f;
         float barY = moneyY + 2.0f;
 
-        // Background
-        drawRect(barX, barY, 200.0f, barH, 0.15f, 0.15f, 0.2f, 0.6f);
+        batchRect(barX, barY, 200.0f, barH, 0.15f, 0.15f, 0.2f, 0.6f);
 
-        // Bar color: green if positive, red if negative
         if (stationMoney >= 0) {
-            drawRect(barX, barY, barW, barH, 0.2f, 0.8f, 0.3f);
+            batchRect(barX, barY, barW, barH, 0.2f, 0.8f, 0.3f);
         } else {
-            drawRect(barX, barY, barW, barH, 0.9f, 0.2f, 0.2f);
+            batchRect(barX, barY, barW, barH, 0.9f, 0.2f, 0.2f);
         }
 
-        // Coin pips: one small yellow square per 100 money, up to 10
         int pips = std::min(std::abs(stationMoney) / 100, 10);
         for (int i = 0; i < pips; i++) {
             float pipX = barX + i * 14.0f + 2.0f;
             float pipY = moneyY + barH + 6.0f;
-            drawRect(pipX, pipY, 10.0f, 6.0f, 1.0f, 0.85f, 0.2f);
+            batchRect(pipX, pipY, 10.0f, 6.0f, 1.0f, 0.85f, 0.2f);
         }
     }
 
-    // Find the nearest docked ship within 300px of the local player
+    // Stamina bar (bottom-left, above hotbar area)
+    {
+        float staminaBarX = 4.0f;
+        float staminaBarY = static_cast<float>(windowHeight) - 24.0f;
+        float staminaBarW = 100.0f;
+        float staminaBarH = 6.0f;
+        float staminaPct = (localPlayer->maxStamina > 0.0f) ?
+            localPlayer->stamina / localPlayer->maxStamina : 1.0f;
+
+        // Only show when stamina is not full (avoid clutter)
+        if (staminaPct < 0.99f) {
+            // Background
+            batchRect(staminaBarX, staminaBarY, staminaBarW, staminaBarH, 0.15f, 0.15f, 0.2f, 0.7f);
+            // Fill — color shifts from cyan to red as stamina depletes
+            float fillW = staminaBarW * staminaPct;
+            float sr = 0.2f + (1.0f - staminaPct) * 0.7f; // 0.2 → 0.9
+            float sg = 0.7f * staminaPct + 0.2f;            // 0.9 → 0.2
+            float sb = 0.9f * staminaPct;                    // 0.9 → 0.0
+            batchRect(staminaBarX, staminaBarY, fillW, staminaBarH, sr, sg, sb, 0.9f);
+            // Small sprint icon (lightning bolt shape — just a small yellow rect as indicator)
+            batchRect(staminaBarX + staminaBarW + 4.0f, staminaBarY - 1.0f, 4.0f, 8.0f, 1.0f, 0.9f, 0.2f, 0.8f);
+        }
+    }
+
+    // Find nearest docked ship
     float playerCX = localPlayer->x + localPlayer->width / 2.0f;
     float playerCY = localPlayer->y + localPlayer->height / 2.0f;
     const Ship* nearestShip = nullptr;
@@ -473,16 +575,27 @@ void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject
         renderObjectivesPanel(nearestShip);
     }
 
-    // Restore world projection
+    // Flush all HUD rects in one draw call
+    flushBatch();
+
     endScreenSpace();
 }
 
 void Renderer::beginScreenSpace() {
+    // Flush any pending world-space batch
+    flushBatch();
+
     glm::mat4 proj = glm::ortho(0.0f, (float)windowWidth, (float)windowHeight, 0.0f, -1.0f, 1.0f);
+    glUseProgram(shaderProgram);
     glUniformMatrix4fv(uProjection, 1, GL_FALSE, glm::value_ptr(proj));
+    glUseProgram(batchShaderProgram);
+    glUniformMatrix4fv(uBatchProjection, 1, GL_FALSE, glm::value_ptr(proj));
 }
 
 void Renderer::endScreenSpace() {
+    // Flush any pending screen-space batch
+    flushBatch();
+
     glm::mat4 proj = glm::ortho(
         cameraX - windowWidth / 2.0f,
         cameraX + windowWidth / 2.0f,
@@ -490,94 +603,86 @@ void Renderer::endScreenSpace() {
         cameraY - windowHeight / 2.0f,
         -1.0f, 1.0f
     );
+    glUseProgram(shaderProgram);
     glUniformMatrix4fv(uProjection, 1, GL_FALSE, glm::value_ptr(proj));
+    glUseProgram(batchShaderProgram);
+    glUniformMatrix4fv(uBatchProjection, 1, GL_FALSE, glm::value_ptr(proj));
 }
 
 void Renderer::drawUIRect(float x, float y, float w, float h, float r, float g, float b, float a) {
-    drawRect(x, y, w, h, r, g, b, a);
+    batchRect(x, y, w, h, r, g, b, a);
+    flushBatch();
 }
 
 void Renderer::drawUIOutline(float x, float y, float w, float h, float thickness, float r, float g, float b, float a) {
-    // Top
-    drawRect(x, y, w, thickness, r, g, b, a);
-    // Bottom
-    drawRect(x, y + h - thickness, w, thickness, r, g, b, a);
-    // Left
-    drawRect(x, y, thickness, h, r, g, b, a);
-    // Right
-    drawRect(x + w - thickness, y, thickness, h, r, g, b, a);
+    batchRect(x, y, w, thickness, r, g, b, a);
+    batchRect(x, y + h - thickness, w, thickness, r, g, b, a);
+    batchRect(x, y, thickness, h, r, g, b, a);
+    batchRect(x + w - thickness, y, thickness, h, r, g, b, a);
+    flushBatch();
 }
 
 void Renderer::drawWorldRect(float x, float y, float w, float h, float r, float g, float b, float a) {
-    drawRect(x, y, w, h, r, g, b, a);
+    batchRect(x, y, w, h, r, g, b, a);
+    flushBatch();
 }
 
 glm::vec4 Renderer::getCargoTypeColor(CargoType type) {
     switch (type) {
-        case CargoType::METAL:    return {0.75f, 0.75f, 0.8f, 1.0f};   // silver
-        case CargoType::ORE:      return {0.7f, 0.45f, 0.25f, 1.0f};   // rusty orange-brown
-        case CargoType::FUEL:     return {0.9f, 0.9f, 0.2f, 1.0f};     // bright yellow
-        case CargoType::FOOD:     return {0.3f, 0.8f, 0.3f, 1.0f};     // green
-        case CargoType::CRYSTALS: return {0.6f, 0.3f, 0.9f, 1.0f};     // purple
-        case CargoType::PLASMA:   return {0.2f, 0.9f, 0.9f, 1.0f};     // bright cyan
+        case CargoType::METAL:    return {0.75f, 0.75f, 0.8f, 1.0f};
+        case CargoType::ORE:      return {0.7f, 0.45f, 0.25f, 1.0f};
+        case CargoType::FUEL:     return {0.9f, 0.9f, 0.2f, 1.0f};
+        case CargoType::FOOD:     return {0.3f, 0.8f, 0.3f, 1.0f};
+        case CargoType::CRYSTALS: return {0.6f, 0.3f, 0.9f, 1.0f};
+        case CargoType::PLASMA:   return {0.2f, 0.9f, 0.9f, 1.0f};
         default:                  return {0.5f, 0.5f, 0.5f, 1.0f};
     }
 }
 
 void Renderer::renderObjectivesPanel(const Ship* ship) {
-    // Panel on the right side of screen
     float panelW = 120.0f;
     float panelH = 290.0f;
     float panelX = windowWidth - panelW - 10.0f;
     float panelY = 40.0f;
 
-    // Panel background
-    drawRect(panelX, panelY, panelW, panelH, 0.1f, 0.1f, 0.15f, 0.85f);
+    batchRect(panelX, panelY, panelW, panelH, 0.1f, 0.1f, 0.15f, 0.85f);
 
     float y = panelY + 8.0f;
     float iconSize = 16.0f;
     float dotSize = 6.0f;
     float sectionPad = 12.0f;
 
-    // Helper lambda for export dot-indicator rows
     auto drawExportRow = [&](CargoType ctype, uint8_t remaining, uint8_t total, bool lastInSection) {
-        if (total == 0) return; // skip rows with zero total
+        if (total == 0) return;
         glm::vec4 c = getCargoTypeColor(ctype);
         bool allTaken = (remaining == 0);
-        drawRect(panelX + 8.0f, y, iconSize, iconSize, c.r, c.g, c.b);
+        batchRect(panelX + 8.0f, y, iconSize, iconSize, c.r, c.g, c.b);
         if (allTaken) {
-            drawRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
+            batchRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
         }
         float dotX = panelX + 8.0f + iconSize + 6.0f;
         for (int i = 0; i < total; i++) {
             bool withdrawn = (i >= remaining);
             if (withdrawn) {
-                drawRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.2f, 0.9f, 0.2f);
+                batchRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.2f, 0.9f, 0.2f);
             } else {
-                drawRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.5f, 0.5f, 0.55f);
+                batchRect(dotX, y + (iconSize - dotSize) / 2.0f, dotSize, dotSize, 0.5f, 0.5f, 0.55f);
             }
             dotX += dotSize + 2.0f;
         }
         y += iconSize + (lastInSection ? sectionPad : 6.0f);
     };
 
-    // === EXPORT SECTION (items to take off ship) ===
-    // Section header bar
-    drawRect(panelX, y, panelW, 3.0f, 0.8f, 0.4f, 0.2f); // orange bar = export
+    // EXPORT SECTION
+    batchRect(panelX, y, panelW, 3.0f, 0.8f, 0.4f, 0.2f);
     y += 8.0f;
-
-    // Metal row
     drawExportRow(CargoType::METAL, ship->metalToUnload, ship->totalMetal, false);
-    // Ore row
     drawExportRow(CargoType::ORE, ship->oreToUnload, ship->totalOre, false);
-    // Crystals row
     drawExportRow(CargoType::CRYSTALS, ship->crystalsToUnload, ship->totalCrystals, false);
-    // Plasma row
     drawExportRow(CargoType::PLASMA, ship->plasmaToUnload, ship->totalPlasma, true);
 
-    // === IMPORT SECTION (items to load onto ship) ===
-    // Section header bar
-    drawRect(panelX, y, panelW, 3.0f, 0.2f, 0.6f, 0.9f); // blue bar = import
+    // IMPORT SECTION
+    batchRect(panelX, y, panelW, 3.0f, 0.2f, 0.6f, 0.9f);
     y += 8.0f;
 
     // Fuel row
@@ -585,20 +690,15 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
         glm::vec4 fc = getCargoTypeColor(CargoType::FUEL);
         float pct = ship->fuel / ship->maxFuel;
         bool full = (pct >= 1.0f);
-        drawRect(panelX + 8.0f, y, iconSize, iconSize, fc.r, fc.g, fc.b);
-        if (full) {
-            drawRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
-        }
-        // Progress bar
+        batchRect(panelX + 8.0f, y, iconSize, iconSize, fc.r, fc.g, fc.b);
+        if (full) batchRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
         float barX = panelX + 8.0f + iconSize + 6.0f;
         float barW = panelW - iconSize - 22.0f;
         float barH = 8.0f;
         float barY = y + (iconSize - barH) / 2.0f;
-        drawRect(barX, barY, barW, barH, 0.2f, 0.2f, 0.2f);
-        drawRect(barX, barY, barW * pct, barH, fc.r, fc.g, fc.b);
-        if (full) {
-            drawRect(barX, barY, barW, barH, 0.2f, 0.9f, 0.2f, 0.3f);
-        }
+        batchRect(barX, barY, barW, barH, 0.2f, 0.2f, 0.2f);
+        batchRect(barX, barY, barW * pct, barH, fc.r, fc.g, fc.b);
+        if (full) batchRect(barX, barY, barW, barH, 0.2f, 0.9f, 0.2f, 0.3f);
         y += iconSize + 6.0f;
     }
 
@@ -607,29 +707,23 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
         glm::vec4 fc = getCargoTypeColor(CargoType::FOOD);
         float pct = ship->food / ship->maxFood;
         bool full = (pct >= 1.0f);
-        drawRect(panelX + 8.0f, y, iconSize, iconSize, fc.r, fc.g, fc.b);
-        if (full) {
-            drawRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
-        }
+        batchRect(panelX + 8.0f, y, iconSize, iconSize, fc.r, fc.g, fc.b);
+        if (full) batchRect(panelX + 8.0f, y, iconSize, iconSize, 0.2f, 0.9f, 0.2f, 0.5f);
         float barX = panelX + 8.0f + iconSize + 6.0f;
         float barW = panelW - iconSize - 22.0f;
         float barH = 8.0f;
         float barY = y + (iconSize - barH) / 2.0f;
-        drawRect(barX, barY, barW, barH, 0.2f, 0.2f, 0.2f);
-        drawRect(barX, barY, barW * pct, barH, fc.r, fc.g, fc.b);
-        if (full) {
-            drawRect(barX, barY, barW, barH, 0.2f, 0.9f, 0.2f, 0.3f);
-        }
+        batchRect(barX, barY, barW, barH, 0.2f, 0.2f, 0.2f);
+        batchRect(barX, barY, barW * pct, barH, fc.r, fc.g, fc.b);
+        if (full) batchRect(barX, barY, barW, barH, 0.2f, 0.9f, 0.2f, 0.3f);
         y += iconSize + sectionPad;
     }
 
-    // === PATIENCE SECTION ===
+    // PATIENCE SECTION
     if (ship->state == ShipState::WAITING_RESUPPLY && ship->maxPatience > 0.0f) {
-        // Separator bar
-        drawRect(panelX, y, panelW, 3.0f, 0.6f, 0.6f, 0.65f);
+        batchRect(panelX, y, panelW, 3.0f, 0.6f, 0.6f, 0.65f);
         y += 8.0f;
 
-        // Patience bar
         float pct = ship->patienceTimer / ship->maxPatience;
         if (pct < 0.0f) pct = 0.0f;
         if (pct > 1.0f) pct = 1.0f;
@@ -638,109 +732,86 @@ void Renderer::renderObjectivesPanel(const Ship* ship) {
         float pBarW = panelW - 16.0f;
         float pBarH = 10.0f;
 
-        // Color: green -> yellow -> red as patience decreases
         float pr, pg, pb;
-        if (pct > 0.5f) {
-            pr = 0.3f; pg = 0.9f; pb = 0.3f; // green
-        } else if (pct > 0.25f) {
-            pr = 0.9f; pg = 0.9f; pb = 0.2f; // yellow
-        } else {
-            pr = 0.9f; pg = 0.2f; pb = 0.2f; // red
-        }
+        if (pct > 0.5f) { pr = 0.3f; pg = 0.9f; pb = 0.3f; }
+        else if (pct > 0.25f) { pr = 0.9f; pg = 0.9f; pb = 0.2f; }
+        else { pr = 0.9f; pg = 0.2f; pb = 0.2f; }
 
-        // Flash/pulse when below 25%
         float alpha = 1.0f;
         if (pct < 0.25f) {
             float t = static_cast<float>(glfwGetTime());
-            alpha = 0.5f + 0.5f * std::sin(t * 6.0f); // pulse between 0.5 and 1.0
+            alpha = 0.5f + 0.5f * std::sin(t * 6.0f);
             if (alpha < 0.5f) alpha = 0.5f;
         }
 
-        // Background
-        drawRect(pBarX, y, pBarW, pBarH, 0.2f, 0.2f, 0.2f);
-        // Fill
-        drawRect(pBarX, y, pBarW * pct, pBarH, pr, pg, pb, alpha);
+        batchRect(pBarX, y, pBarW, pBarH, 0.2f, 0.2f, 0.2f);
+        batchRect(pBarX, y, pBarW * pct, pBarH, pr, pg, pb, alpha);
     }
 }
 
 void Renderer::renderCargoTooltip(float screenX, float screenY, CargoType type) {
-    // Tooltip: small dark panel with colored square + distinctive icon shape
     float tooltipW = 44.0f;
     float tooltipH = 24.0f;
-    // Offset so tooltip doesn't overlap cursor
     float tx = screenX + 12.0f;
     float ty = screenY - tooltipH - 4.0f;
-    // Clamp to window
     if (tx + tooltipW > windowWidth) tx = screenX - tooltipW - 4.0f;
     if (ty < 0) ty = screenY + 16.0f;
 
-    // Background panel
-    drawRect(tx, ty, tooltipW, tooltipH, 0.08f, 0.08f, 0.12f, 0.9f);
-    // Border
-    drawRect(tx, ty, tooltipW, 1.0f, 0.4f, 0.4f, 0.45f, 0.8f);
-    drawRect(tx, ty + tooltipH - 1.0f, tooltipW, 1.0f, 0.4f, 0.4f, 0.45f, 0.8f);
-    drawRect(tx, ty, 1.0f, tooltipH, 0.4f, 0.4f, 0.45f, 0.8f);
-    drawRect(tx + tooltipW - 1.0f, ty, 1.0f, tooltipH, 0.4f, 0.4f, 0.45f, 0.8f);
+    batchRect(tx, ty, tooltipW, tooltipH, 0.08f, 0.08f, 0.12f, 0.9f);
+    batchRect(tx, ty, tooltipW, 1.0f, 0.4f, 0.4f, 0.45f, 0.8f);
+    batchRect(tx, ty + tooltipH - 1.0f, tooltipW, 1.0f, 0.4f, 0.4f, 0.45f, 0.8f);
+    batchRect(tx, ty, 1.0f, tooltipH, 0.4f, 0.4f, 0.45f, 0.8f);
+    batchRect(tx + tooltipW - 1.0f, ty, 1.0f, tooltipH, 0.4f, 0.4f, 0.45f, 0.8f);
 
-    // Colored cargo square
     glm::vec4 c = getCargoTypeColor(type);
     float sqX = tx + 4.0f;
     float sqY = ty + 4.0f;
     float sqSize = 16.0f;
-    drawRect(sqX, sqY, sqSize, sqSize, c.r, c.g, c.b);
+    batchRect(sqX, sqY, sqSize, sqSize, c.r, c.g, c.b);
 
-    // Distinctive icon next to the square (approx 12x12, using simple shapes)
     float iconX = sqX + sqSize + 4.0f;
     float iconY = sqY + 2.0f;
     float iconS = 12.0f;
 
     switch (type) {
         case CargoType::METAL:
-            // Three horizontal bars (ingot-like)
-            drawRect(iconX, iconY, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
-            drawRect(iconX, iconY + 4.5f, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
-            drawRect(iconX, iconY + 9.0f, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
+            batchRect(iconX, iconY, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
+            batchRect(iconX, iconY + 4.5f, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
+            batchRect(iconX, iconY + 9.0f, iconS, 3.0f, 0.9f, 0.9f, 0.95f);
             break;
         case CargoType::ORE:
-            // Rough diamond shape (rotated square via 4 rects)
-            drawRect(iconX + 3.0f, iconY, 6.0f, 4.0f, c.r, c.g, c.b);
-            drawRect(iconX + 1.0f, iconY + 3.0f, 10.0f, 6.0f, c.r, c.g, c.b);
-            drawRect(iconX + 3.0f, iconY + 8.0f, 6.0f, 4.0f, c.r, c.g, c.b);
+            batchRect(iconX + 3.0f, iconY, 6.0f, 4.0f, c.r, c.g, c.b);
+            batchRect(iconX + 1.0f, iconY + 3.0f, 10.0f, 6.0f, c.r, c.g, c.b);
+            batchRect(iconX + 3.0f, iconY + 8.0f, 6.0f, 4.0f, c.r, c.g, c.b);
             break;
         case CargoType::CRYSTALS:
-            // Pointy triangle shape (stacked rects narrowing upward)
-            drawRect(iconX + 4.0f, iconY, 4.0f, 3.0f, c.r, c.g, c.b);
-            drawRect(iconX + 2.0f, iconY + 3.0f, 8.0f, 3.0f, c.r, c.g, c.b);
-            drawRect(iconX, iconY + 6.0f, 12.0f, 6.0f, c.r, c.g, c.b);
+            batchRect(iconX + 4.0f, iconY, 4.0f, 3.0f, c.r, c.g, c.b);
+            batchRect(iconX + 2.0f, iconY + 3.0f, 8.0f, 3.0f, c.r, c.g, c.b);
+            batchRect(iconX, iconY + 6.0f, 12.0f, 6.0f, c.r, c.g, c.b);
             break;
         case CargoType::PLASMA:
-            // Circle approximation (small filled square with rounded corners via overlapping rects)
-            drawRect(iconX + 2.0f, iconY, 8.0f, 12.0f, c.r, c.g, c.b);
-            drawRect(iconX, iconY + 2.0f, 12.0f, 8.0f, c.r, c.g, c.b);
+            batchRect(iconX + 2.0f, iconY, 8.0f, 12.0f, c.r, c.g, c.b);
+            batchRect(iconX, iconY + 2.0f, 12.0f, 8.0f, c.r, c.g, c.b);
             break;
         case CargoType::FUEL:
-            // Flame shape (narrow at top, wide at bottom)
-            drawRect(iconX + 4.0f, iconY, 4.0f, 4.0f, c.r, c.g, c.b);
-            drawRect(iconX + 2.0f, iconY + 4.0f, 8.0f, 4.0f, c.r, c.g, c.b);
-            drawRect(iconX + 1.0f, iconY + 8.0f, 10.0f, 4.0f, c.r, c.g, c.b);
+            batchRect(iconX + 4.0f, iconY, 4.0f, 4.0f, c.r, c.g, c.b);
+            batchRect(iconX + 2.0f, iconY + 4.0f, 8.0f, 4.0f, c.r, c.g, c.b);
+            batchRect(iconX + 1.0f, iconY + 8.0f, 10.0f, 4.0f, c.r, c.g, c.b);
             break;
         case CargoType::FOOD:
-            // Leaf shape (small at edges, big in center)
-            drawRect(iconX + 3.0f, iconY, 6.0f, 2.0f, c.r, c.g, c.b);
-            drawRect(iconX + 1.0f, iconY + 2.0f, 10.0f, 8.0f, c.r, c.g, c.b);
-            drawRect(iconX + 3.0f, iconY + 10.0f, 6.0f, 2.0f, c.r, c.g, c.b);
+            batchRect(iconX + 3.0f, iconY, 6.0f, 2.0f, c.r, c.g, c.b);
+            batchRect(iconX + 1.0f, iconY + 2.0f, 10.0f, 8.0f, c.r, c.g, c.b);
+            batchRect(iconX + 3.0f, iconY + 10.0f, 6.0f, 2.0f, c.r, c.g, c.b);
             break;
         default:
-            drawRect(iconX, iconY, iconS, iconS, 0.5f, 0.5f, 0.5f);
+            batchRect(iconX, iconY, iconS, iconS, 0.5f, 0.5f, 0.5f);
             break;
     }
+
+    flushBatch();
 }
 
 void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
-    // Draw lines (as thin rects) from each tethered cargo to its anchor
-    // Anchor: player (tetherOrder==0) or previous cargo in the chain
-
-    // First, find all players (for color lookup)
     std::unordered_map<uint32_t, const Player*> playersById;
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::PLAYER && obj->active) {
@@ -748,7 +819,6 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
         }
     }
 
-    // Gather tethered cargo grouped by player, sorted by tetherOrder
     std::unordered_map<uint32_t, std::vector<const Cargo*>> tetheredByPlayer;
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::CARGO && obj->active) {
@@ -760,7 +830,6 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
     }
 
     for (auto& [playerId, cargoList] : tetheredByPlayer) {
-        // Sort by tetherOrder
         std::sort(cargoList.begin(), cargoList.end(), [](const Cargo* a, const Cargo* b) {
             return a->tetherOrder < b->tetherOrder;
         });
@@ -769,7 +838,6 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
         if (playerIt == playersById.end()) continue;
         const Player* player = playerIt->second;
 
-        // Get player color for the rope
         uint8_t ci = player->colorIndex % 8;
         float pr = PLAYER_COLORS[ci][0];
         float pg = PLAYER_COLORS[ci][1];
@@ -778,7 +846,7 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
         for (size_t i = 0; i < cargoList.size(); i++) {
             const Cargo* cargo = cargoList[i];
 
-            float toX, toY; // anchor point
+            float toX, toY;
             if (i == 0) {
                 toX = player->x + player->width / 2.0f;
                 toY = player->y + player->height / 2.0f;
@@ -790,7 +858,6 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
             float fromX = cargo->x + cargo->width / 2.0f;
             float fromY = cargo->y + cargo->height / 2.0f;
 
-            // Draw a series of small rects along the line
             float dx = toX - fromX;
             float dy = toY - fromY;
             float dist = std::sqrt(dx * dx + dy * dy);
@@ -800,7 +867,7 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
             if (segments < 2) segments = 2;
             if (segments > 30) segments = 30;
 
-            float segW = 3.0f; // rope thickness
+            float segW = 3.0f;
             float segH = 3.0f;
 
             for (int s = 0; s <= segments; s++) {
@@ -808,14 +875,16 @@ void Renderer::renderTetherRopes(const std::vector<GameObject*>& objects) {
                 float sx = fromX + dx * t - segW / 2.0f;
                 float sy = fromY + dy * t - segH / 2.0f;
 
-                // Add a slight sag (catenary approximation)
                 float sag = 4.0f * t * (1.0f - t) * (std::min)(dist * 0.1f, 8.0f);
                 sy += sag;
 
-                drawRect(sx, sy, segW, segH, pr, pg, pb, 0.8f);
+                batchRect(sx, sy, segW, segH, pr, pg, pb, 0.8f);
             }
         }
     }
+
+    // Flush all tether rope segments in one draw call
+    flushBatch();
 }
 
 glm::vec4 Renderer::getCellTypeColor(CellType type) {

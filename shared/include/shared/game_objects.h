@@ -23,6 +23,7 @@ public:
     float openAmount = 0.0f;    // 0.0 = fully closed, 1.0 = fully open
     uint8_t orientation = 0;     // 0 = vertical door (walls left+right, opens horizontally)
                                  // 1 = horizontal door (walls up+down, opens vertically)
+    bool isAirlock = false;      // true = manual E-press toggle only (docking bay doors)
 
     Door();
     Door(uint32_t id, float x, float y);
@@ -124,7 +125,12 @@ public:
     float dx = 0.0f; // pending input
     float dy = 0.0f;
     bool interacting = false;
+    bool sprinting = false;      // client wants to sprint
     uint8_t colorIndex = 0;
+
+    // Stamina system
+    float stamina = 100.0f;      // current stamina (0–100)
+    float maxStamina = 100.0f;
 
     Player();
     Player(uint32_t id, float x, float y, const std::string& name);

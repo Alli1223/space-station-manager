@@ -20,7 +20,7 @@ public:
 
     // Network event handlers
     void onPlayerJoin(uint32_t clientIndex, const std::string& name);
-    void onPlayerInput(uint32_t clientIndex, float dx, float dy, bool interact);
+    void onPlayerInput(uint32_t clientIndex, float dx, float dy, bool interact, bool sprint = false);
     void onPlayerDisconnect(uint32_t clientIndex);
 
     // Edit mode: returns true if the edit was accepted

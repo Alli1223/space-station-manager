@@ -153,13 +153,13 @@ void GameWorld::buildMapObjects() {
         }
     }
 
-    // Third pass: link docking collars to nearest door (airlock)
+    // Third pass: link docking collars to nearest door (airlock) and mark those doors
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::DOCKING_COLLAR && obj->active) {
             auto* collar = static_cast<DockingCollar*>(obj);
             int collarGX = static_cast<int>(std::floor(collar->x / CELL_SIZE));
             int collarGY = static_cast<int>(std::floor(collar->y / CELL_SIZE));
-            uint32_t nearestDoorId = 0;
+            Door* nearestDoor = nullptr;
             float nearestDist = 999999.0f;
             for (auto& di : doorInfos) {
                 float dx = static_cast<float>(collarGX - di.gridX);
@@ -167,10 +167,13 @@ void GameWorld::buildMapObjects() {
                 float dist = std::sqrt(dx * dx + dy * dy);
                 if (dist < nearestDist) {
                     nearestDist = dist;
-                    nearestDoorId = di.door->id;
+                    nearestDoor = di.door;
                 }
             }
-            collar->linkedDoorId = nearestDoorId;
+            if (nearestDoor) {
+                collar->linkedDoorId = nearestDoor->id;
+                nearestDoor->isAirlock = true;
+            }
         }
     }
 
@@ -199,8 +202,49 @@ void GameWorld::update(float dt) {
     for (auto& [clientIdx, player] : playersByClientIndex) {
         if (!player->active) continue;
 
+        // Count tethered cargo for speed penalty
+        int tetheredCount = 0;
+        for (auto* obj : objects) {
+            if (obj->type == GameObjectType::CARGO && obj->active) {
+                auto* cargo = static_cast<Cargo*>(obj);
+                if (cargo->tetheredToPlayerId == player->id) tetheredCount++;
+            }
+        }
+
+        // Also count carried cargo as 1
+        if (player->isCarrying()) tetheredCount++;
+
+        // Cargo slowdown: each tethered/carried item reduces speed by 10%, min 40% speed
+        float cargoSpeedMult = (std::max)(0.4f, 1.0f - tetheredCount * 0.1f);
+
+        // Sprint: 1.7x speed when sprinting and has stamina
+        constexpr float SPRINT_MULTIPLIER = 1.7f;
+        constexpr float STAMINA_DRAIN_RATE = 25.0f;  // per second while sprinting
+        constexpr float STAMINA_REGEN_RATE = 15.0f;   // per second while not sprinting
+        constexpr float STAMINA_REGEN_DELAY = 0.8f;   // seconds after stopping sprint before regen starts
+
+        bool isMoving = (player->dx != 0.0f || player->dy != 0.0f);
+        bool canSprint = player->sprinting && isMoving && player->stamina > 0.0f;
+
+        float sprintMult = 1.0f;
+        if (canSprint) {
+            sprintMult = SPRINT_MULTIPLIER;
+            player->stamina -= STAMINA_DRAIN_RATE * dt;
+            if (player->stamina < 0.0f) player->stamina = 0.0f;
+        } else {
+            // Regen stamina when not sprinting
+            if (!player->sprinting && player->stamina < player->maxStamina) {
+                player->stamina += STAMINA_REGEN_RATE * dt;
+                if (player->stamina > player->maxStamina) player->stamina = player->maxStamina;
+            }
+        }
+
+        // Set effective speed for collision system
+        float baseSpeed = PLAYER_SPEED;
+        player->speed = baseSpeed * cargoSpeedMult * sprintMult;
+
         // Apply pending input
-        if (player->dx != 0.0f || player->dy != 0.0f) {
+        if (isMoving) {
             collision.moveWithCollision(map, doors, dockedShips, *player, player->dx, player->dy, dt);
         }
 
@@ -348,8 +392,10 @@ void GameWorld::update(float dt) {
             return a->tetherOrder < b->tetherOrder;
         });
 
-        constexpr float REST_LENGTH = 30.0f;
-        constexpr float ELASTICITY = 0.3f;
+        constexpr float REST_LENGTH = 26.0f;
+        constexpr float SPRING_STIFFNESS = 8.0f;  // spring constant
+        constexpr float DAMPING = 0.92f;           // velocity damping per frame
+        constexpr float MAX_PULL_SPEED = 300.0f;   // max pull speed in px/s
 
         for (size_t i = 0; i < tethered.size(); i++) {
             Cargo* cargo = tethered[i];
@@ -371,13 +417,24 @@ void GameWorld::update(float dt) {
             float dist = std::sqrt(dx * dx + dy * dy);
 
             if (dist > REST_LENGTH) {
-                // Normalize direction
                 float dirX = dx / dist;
                 float dirY = dy / dist;
-                float pullAmount = (dist - REST_LENGTH) * ELASTICITY;
 
-                float newX = cargo->x + dirX * pullAmount;
-                float newY = cargo->y + dirY * pullAmount;
+                // Spring force proportional to stretch beyond rest length
+                float stretch = dist - REST_LENGTH;
+                float force = stretch * SPRING_STIFFNESS;
+                if (force > MAX_PULL_SPEED) force = MAX_PULL_SPEED;
+
+                // Apply as velocity * dt for frame-rate independent movement
+                float moveX = dirX * force * dt;
+                float moveY = dirY * force * dt;
+
+                // Apply damping to prevent oscillation
+                moveX *= DAMPING;
+                moveY *= DAMPING;
+
+                float newX = cargo->x + moveX;
+                float newY = cargo->y + moveY;
 
                 // Check wall collision before committing (axis-separated)
                 if (!collision.wouldCargoCollide(map, doors, newX, cargo->y, cargo->width, cargo->height)) {
@@ -390,7 +447,8 @@ void GameWorld::update(float dt) {
         }
     }
 
-    // Auto-open/close doors based on player proximity
+    // Auto-open/close doors based on player and cargo proximity
+    // Airlock doors are manual (E-press only) — they animate toward their target state
     {
         constexpr float DOOR_OPEN_RANGE = 48.0f; // pixels — slightly more than 1 cell
         constexpr float DOOR_ANIM_SPEED = 5.0f;  // 0→1 in 0.2s
@@ -402,30 +460,57 @@ void GameWorld::update(float dt) {
             float doorCX = door->x + door->width / 2.0f;
             float doorCY = door->y + door->height / 2.0f;
 
-            // Check if any player is near this door
-            bool playerNearby = false;
-            for (auto& [idx, player] : playersByClientIndex) {
-                if (!player->active) continue;
-                float pcx = player->x + player->width / 2.0f;
-                float pcy = player->y + player->height / 2.0f;
-                float ddx = pcx - doorCX;
-                float ddy = pcy - doorCY;
-                if (ddx * ddx + ddy * ddy < DOOR_OPEN_RANGE * DOOR_OPEN_RANGE) {
-                    playerNearby = true;
-                    break;
-                }
-            }
+            if (!door->isAirlock) {
+                // Regular doors: auto-open when player OR on-ground cargo is nearby
+                bool somethingNearby = false;
 
-            // Set target state and animate
-            if (playerNearby) {
-                door->state = DoorState::OPEN;
-                door->openAmount += DOOR_ANIM_SPEED * dt;
-                if (door->openAmount > 1.0f) door->openAmount = 1.0f;
+                // Check players
+                for (auto& [idx, player] : playersByClientIndex) {
+                    if (!player->active) continue;
+                    float pcx = player->x + player->width / 2.0f;
+                    float pcy = player->y + player->height / 2.0f;
+                    float ddx = pcx - doorCX;
+                    float ddy = pcy - doorCY;
+                    if (ddx * ddx + ddy * ddy < DOOR_OPEN_RANGE * DOOR_OPEN_RANGE) {
+                        somethingNearby = true;
+                        break;
+                    }
+                }
+
+                // Check on-ground cargo (tethered or just pushed near)
+                if (!somethingNearby) {
+                    for (auto* cargo : groundCargo) {
+                        float ccx = cargo->x + cargo->width / 2.0f;
+                        float ccy = cargo->y + cargo->height / 2.0f;
+                        float ddx = ccx - doorCX;
+                        float ddy = ccy - doorCY;
+                        if (ddx * ddx + ddy * ddy < DOOR_OPEN_RANGE * DOOR_OPEN_RANGE) {
+                            somethingNearby = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Set target state and animate
+                if (somethingNearby) {
+                    door->state = DoorState::OPEN;
+                    door->openAmount += DOOR_ANIM_SPEED * dt;
+                    if (door->openAmount > 1.0f) door->openAmount = 1.0f;
+                } else {
+                    door->openAmount -= DOOR_ANIM_SPEED * dt;
+                    if (door->openAmount < 0.0f) {
+                        door->openAmount = 0.0f;
+                        door->state = DoorState::CLOSED;
+                    }
+                }
             } else {
-                door->openAmount -= DOOR_ANIM_SPEED * dt;
-                if (door->openAmount < 0.0f) {
-                    door->openAmount = 0.0f;
-                    door->state = DoorState::CLOSED;
+                // Airlock doors: animate toward current target state (set by E-press)
+                if (door->state == DoorState::OPEN) {
+                    door->openAmount += DOOR_ANIM_SPEED * dt;
+                    if (door->openAmount > 1.0f) door->openAmount = 1.0f;
+                } else {
+                    door->openAmount -= DOOR_ANIM_SPEED * dt;
+                    if (door->openAmount < 0.0f) door->openAmount = 0.0f;
                 }
             }
         }
@@ -457,7 +542,7 @@ void GameWorld::onPlayerJoin(uint32_t clientIndex, const std::string& name) {
               << ") joined at (" << spawnX << ", " << spawnY << ")" << std::endl;
 }
 
-void GameWorld::onPlayerInput(uint32_t clientIndex, float dx, float dy, bool interact) {
+void GameWorld::onPlayerInput(uint32_t clientIndex, float dx, float dy, bool interact, bool sprint) {
     Player* player = findPlayer(clientIndex);
     if (!player) return;
 
@@ -470,6 +555,7 @@ void GameWorld::onPlayerInput(uint32_t clientIndex, float dx, float dy, bool int
 
     player->dx = dx;
     player->dy = dy;
+    player->sprinting = sprint;
     if (interact) {
         player->interacting = true;
         std::cout << "[SERVER] Received interact from client " << clientIndex
@@ -530,6 +616,34 @@ void GameWorld::handleInteraction(Player* player) {
     std::cout << "[SERVER] Interact received from '" << player->name
               << "' at (" << centerX << ", " << centerY << ")"
               << (player->isCarrying() ? " [carrying cargo]" : "") << std::endl;
+
+    // Check for nearby airlock door to toggle FIRST (even when carrying cargo,
+    // so the player can open/close airlocks while hauling supplies to ships)
+    {
+        Door* nearestAirlock = nullptr;
+        float nearestAirlockDist = INTERACTION_RANGE;
+        for (auto* obj : objects) {
+            if (obj->type != GameObjectType::DOOR || !obj->active) continue;
+            auto* door = static_cast<Door*>(obj);
+            if (!door->isAirlock) continue;
+            float dx = centerX - (door->x + door->width / 2.0f);
+            float dy = centerY - (door->y + door->height / 2.0f);
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < nearestAirlockDist) {
+                nearestAirlockDist = dist;
+                nearestAirlock = door;
+            }
+        }
+        if (nearestAirlock) {
+            // Toggle airlock door state
+            nearestAirlock->state = (nearestAirlock->state == DoorState::CLOSED)
+                                    ? DoorState::OPEN : DoorState::CLOSED;
+            std::cout << "[SERVER] Player '" << player->name << "' toggled airlock door "
+                      << nearestAirlock->id << " to "
+                      << (nearestAirlock->state == DoorState::OPEN ? "OPEN" : "CLOSED") << std::endl;
+            return;
+        }
+    }
 
     // If carrying cargo, try to drop it or load it onto a ship
     if (player->isCarrying()) {

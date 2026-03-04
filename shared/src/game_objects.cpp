@@ -22,12 +22,14 @@ void Door::serialize(ByteBuffer& buf) const {
     buf.writeU8(static_cast<uint8_t>(state));
     buf.writeFloat(openAmount);
     buf.writeU8(orientation);
+    buf.writeU8(isAirlock ? 1 : 0);
 }
 void Door::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
     state = static_cast<DoorState>(buf.readU8());
     openAmount = buf.readFloat();
     orientation = buf.readU8();
+    isAirlock = (buf.readU8() != 0);
 }
 
 // --- Terminal ---
@@ -189,6 +191,8 @@ void Player::serialize(ByteBuffer& buf) const {
     buf.writeFloat(speed);
     buf.writeU32(carryingCargoId);
     buf.writeU8(colorIndex);
+    buf.writeFloat(stamina);
+    buf.writeFloat(maxStamina);
 }
 void Player::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
@@ -196,6 +200,8 @@ void Player::deserialize(ByteBuffer& buf) {
     speed = buf.readFloat();
     carryingCargoId = buf.readU32();
     colorIndex = buf.readU8();
+    stamina = buf.readFloat();
+    maxStamina = buf.readFloat();
 }
 
 } // namespace ssm
