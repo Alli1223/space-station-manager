@@ -1,0 +1,10 @@
+build/
+cmake-build-*/
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln
+*.vcxproj*
+CMakeSettings.json
+out/
