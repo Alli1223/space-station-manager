@@ -63,6 +63,18 @@ ByteBuffer buildTetherToggleMessage(uint32_t cargoId) {
     return buf;
 }
 
+ByteBuffer buildTurretAimMessage(float angle, bool firing) {
+    ByteBuffer buf;
+    buf.writeFloat(angle);
+    buf.writeBool(firing);
+    return buf;
+}
+
+ByteBuffer buildTurretExitMessage() {
+    ByteBuffer buf;
+    return buf;
+}
+
 // --- Server -> Client ---
 
 ByteBuffer buildWelcomeMessage(uint32_t playerId, const std::vector<uint8_t>& mapData,

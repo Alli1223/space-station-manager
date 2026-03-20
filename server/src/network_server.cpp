@@ -182,6 +182,16 @@ void NetworkServer::processMessages(uint32_t clientIndex) {
                 if (onTetherToggle) onTetherToggle(clientIndex, cargoId);
                 break;
             }
+            case MessageType::MSG_TURRET_AIM: {
+                float angle = payload.readFloat();
+                bool firing = payload.readBool();
+                if (onTurretAim) onTurretAim(clientIndex, angle, firing);
+                break;
+            }
+            case MessageType::MSG_TURRET_EXIT: {
+                if (onTurretExit) onTurretExit(clientIndex);
+                break;
+            }
             default:
                 break;
         }

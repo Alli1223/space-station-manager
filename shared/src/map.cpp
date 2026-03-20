@@ -16,6 +16,10 @@ CellType StationMap::charToCell(char c) {
         case 'S': return CellType::SPAWN_POINT;
         case 'A': return CellType::AIRLOCK;
         case 'R': return CellType::STORAGE;
+        case 'L': return CellType::LANDING_PAD;
+        case 'H': return CellType::HANGAR_DOOR;
+        case 'F': return CellType::REFINERY;
+        case 'U': return CellType::TURRET_BASE;
         default:  return CellType::EMPTY;
     }
 }
@@ -30,6 +34,10 @@ char StationMap::cellToChar(CellType cell) {
         case CellType::SPAWN_POINT:    return 'S';
         case CellType::AIRLOCK:        return 'A';
         case CellType::STORAGE:        return 'R';
+        case CellType::LANDING_PAD:    return 'L';
+        case CellType::HANGAR_DOOR:    return 'H';
+        case CellType::REFINERY:       return 'F';
+        case CellType::TURRET_BASE:    return 'U';
         default:                       return ' ';
     }
 }
@@ -95,8 +103,8 @@ void StationMap::setCell(int x, int y, CellType type) {
 
 bool StationMap::isSolid(int x, int y) const {
     CellType cell = getCell(x, y);
-    // Only walls are solid. EMPTY is not solid (infinite open space).
-    return cell == CellType::WALL;
+    // Walls and turret bases are solid barriers.
+    return cell == CellType::WALL || cell == CellType::TURRET_BASE;
 }
 
 bool StationMap::isInBounds(int x, int y) const {
@@ -137,6 +145,30 @@ std::vector<std::pair<int, int>> StationMap::findCells(CellType type) const {
     return result;
 }
 
+int16_t StationMap::getWallHP(int x, int y) const {
+    if (!isInBounds(x, y)) return 0;
+    int lx = x - originX;
+    int ly = y - originY;
+    size_t idx = ly * width + lx;
+    if (idx >= wallHP.size()) return 0;
+    return wallHP[idx];
+}
+
+void StationMap::setWallHP(int x, int y, int16_t hp) {
+    if (!isInBounds(x, y)) return;
+    int lx = x - originX;
+    int ly = y - originY;
+    size_t idx = ly * width + lx;
+    if (idx < wallHP.size()) wallHP[idx] = hp;
+}
+
+void StationMap::initWallHP() {
+    wallHP.resize(cells.size(), 0);
+    for (size_t i = 0; i < cells.size(); i++) {
+        wallHP[i] = (cells[i] == CellType::WALL) ? WALL_MAX_HP : 0;
+    }
+}
+
 void StationMap::ensureBounds(int x, int y) {
     if (width == 0 && height == 0) {
         // First cell ever placed
@@ -161,17 +193,22 @@ void StationMap::ensureBounds(int x, int y) {
     }
 
     std::vector<CellType> newCells(newWidth * newHeight, CellType::EMPTY);
+    std::vector<int16_t> newWallHP(newWidth * newHeight, 0);
 
     // Copy old data at the correct offset
     int offsetX = originX - newOriginX;
     int offsetY = originY - newOriginY;
     for (int oy = 0; oy < height; oy++) {
         for (int ox = 0; ox < width; ox++) {
-            newCells[(oy + offsetY) * newWidth + (ox + offsetX)] = cells[oy * width + ox];
+            size_t newIdx = (oy + offsetY) * newWidth + (ox + offsetX);
+            size_t oldIdx = oy * width + ox;
+            newCells[newIdx] = cells[oldIdx];
+            if (oldIdx < wallHP.size()) newWallHP[newIdx] = wallHP[oldIdx];
         }
     }
 
     cells = std::move(newCells);
+    wallHP = std::move(newWallHP);
     originX = newOriginX;
     originY = newOriginY;
     width = newWidth;

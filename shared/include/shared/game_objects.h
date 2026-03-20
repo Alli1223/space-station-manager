@@ -24,6 +24,7 @@ public:
     uint8_t orientation = 0;     // 0 = vertical door (walls left+right, opens horizontally)
                                  // 1 = horizontal door (walls up+down, opens vertically)
     bool isAirlock = false;      // true = manual E-press toggle only (docking bay doors)
+    bool isHangarDoor = false;   // true = controlled by ShipManager for ship entry/exit
 
     Door();
     Door(uint32_t id, float x, float y);
@@ -83,6 +84,7 @@ public:
     uint8_t passengers = 0;   // stored for future use
     float patienceTimer = 60.0f;
     float maxPatience = 60.0f;
+    float departAngle = 0.0f; // angle ship arrived from (used for departure direction)
 
     bool isImpatient() const { return patienceTimer <= 0.0f; }
 
@@ -132,10 +134,68 @@ public:
     float stamina = 100.0f;      // current stamina (0–100)
     float maxStamina = 100.0f;
 
+    // Turret control
+    uint32_t operatingTurretId = 0; // 0 = not in a turret
+
     Player();
     Player(uint32_t id, float x, float y, const std::string& name);
 
     bool isCarrying() const { return carryingCargoId != 0; }
+    bool isInTurret() const { return operatingTurretId != 0; }
+
+    void serialize(ByteBuffer& buf) const override;
+    void deserialize(ByteBuffer& buf) override;
+};
+
+class Turret : public GameObject {
+public:
+    TurretType turretType = TurretType::ENERGY;
+    float aimAngle = 0.0f;       // current aim direction (radians)
+    float facingAngle = 0.0f;    // base direction toward space (radians)
+    uint32_t operatorId = 0;     // player controlling this turret (0 = unmanned)
+    int16_t ammo = -1;           // -1 = unlimited (energy)
+    int16_t maxAmmo = -1;
+    float fireCooldown = 0.0f;
+
+    Turret();
+    Turret(uint32_t id, float x, float y, TurretType type, float facing);
+
+    bool isOccupied() const { return operatorId != 0; }
+    bool hasAmmo() const { return ammo < 0 || ammo > 0; }
+
+    void serialize(ByteBuffer& buf) const override;
+    void deserialize(ByteBuffer& buf) override;
+};
+
+class Projectile : public GameObject {
+public:
+    ProjectileOwner owner = ProjectileOwner::STATION;
+    float velX = 0.0f;
+    float velY = 0.0f;
+    float damage = 10.0f;
+    float lifetime = PROJECTILE_LIFETIME;
+    uint32_t sourceId = 0; // turret or enemy that fired
+
+    Projectile();
+    Projectile(uint32_t id, float x, float y, ProjectileOwner owner,
+               float vx, float vy, float dmg, uint32_t source);
+
+    void serialize(ByteBuffer& buf) const override;
+    void deserialize(ByteBuffer& buf) override;
+};
+
+class EnemyShip : public GameObject {
+public:
+    float health = ENEMY_HP;
+    float maxHealth = ENEMY_HP;
+    float speed = ENEMY_SPEED;
+    float targetX = 0.0f;
+    float targetY = 0.0f;
+    float fireCooldown = 0.0f;
+    int waveIndex = 0;
+
+    EnemyShip();
+    EnemyShip(uint32_t id, float x, float y);
 
     void serialize(ByteBuffer& buf) const override;
     void deserialize(ByteBuffer& buf) override;

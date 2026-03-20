@@ -17,6 +17,10 @@ enum class CellType : uint8_t {
     SPAWN_POINT,
     AIRLOCK,     // floor tile inside airlock
     STORAGE,     // storage area for cargo
+    LANDING_PAD, // ship landing pad inside hangar bay
+    HANGAR_DOOR, // large bay door for ship entry/exit
+    REFINERY,    // refinery input cell — drop raw materials here
+    TURRET_BASE, // turret placement on exterior walls
 };
 
 class StationMap {
@@ -26,6 +30,7 @@ public:
     int originX = 0; // world grid X of cells[0]
     int originY = 0; // world grid Y of cells[0]
     std::vector<CellType> cells; // row-major: cells[(y-originY) * width + (x-originX)]
+    std::vector<int16_t> wallHP; // parallel to cells, HP for WALL cells
 
     bool loadFromFile(const std::string& filename);
     bool loadFromString(const std::string& mapStr);
@@ -42,6 +47,11 @@ public:
 
     // Find all cells of a given type (returns logical/world grid coords)
     std::vector<std::pair<int, int>> findCells(CellType type) const;
+
+    // Wall HP accessors
+    int16_t getWallHP(int x, int y) const;
+    void setWallHP(int x, int y, int16_t hp);
+    void initWallHP();
 
     static CellType charToCell(char c);
     static char cellToChar(CellType cell);

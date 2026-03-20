@@ -47,6 +47,8 @@ public:
     void sendCellEdit(int16_t gridX, int16_t gridY, CellType cellType);
     void sendCargoPlace(float targetX, float targetY);
     void sendTetherToggle(uint32_t cargoId);
+    void sendTurretAim(float angle, bool firing);
+    void sendTurretExit();
 
     bool isConnected() const { return connected; }
 

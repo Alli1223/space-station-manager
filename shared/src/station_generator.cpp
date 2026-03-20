@@ -68,19 +68,21 @@ void StationGenerator::placeRoomWalls(const PlacedRoom& room) {
 
 bool StationGenerator::tryPlaceRoom(const RoomDef& def, int belowY) {
     // Try multiple random positions, biased toward center-X
-    for (int attempt = 0; attempt < 100; attempt++) {
+    for (int attempt = 0; attempt < 150; attempt++) {
         int interiorW = randInt(def.minWidth, def.maxWidth);
         int interiorH = randInt(def.minHeight, def.maxHeight);
         int totalW = interiorW + 2; // +2 for walls
         int totalH = interiorH + 2;
 
-        // Bias X toward center
+        // Bias X toward center, widening range on later attempts
         int centerBias = gridWidth / 2;
-        int rx = centerBias + randInt(-15, 15);
+        int spread = (attempt < 80) ? 20 : 30;
+        int rx = centerBias + randInt(-spread, spread);
         rx = rx - totalW / 2;
 
-        // Y: below the docking bay
-        int ry = belowY + randInt(1, 15);
+        // Y: below the landing bay
+        int ySpread = (attempt < 80) ? 18 : 25;
+        int ry = belowY + randInt(1, ySpread);
 
         // Clamp to grid
         if (rx < 1) rx = 1;
@@ -106,53 +108,60 @@ bool StationGenerator::tryPlaceRoom(const RoomDef& def, int belowY) {
 }
 
 // =========================================================================
-// Docking bay — special top-edge room with 3 collars
+// Landing bay — large hangar with 4 landing pads + hangar door
 // =========================================================================
 
-void StationGenerator::placeDockingBay() {
-    // The docking bay is a wide room anchored to the top of the station.
-    // Rows 0-1 are EMPTY (ship approach zone).
+void StationGenerator::placeLandingBay() {
+    // The landing bay is a large room anchored to the top of the station.
+    // Ships fly in from above through HANGAR_DOOR cells on the north wall,
+    // and land on LANDING_PAD areas inside the bay.
+    // Row 0-1 are EMPTY (ship approach zone above station).
     // The bay starts at row 2.
 
-    int bayInteriorW = randInt(23, 27);
-    int bayInteriorH = randInt(5, 6);
-    int bayW = bayInteriorW + 2; // walls
+    int bayInteriorW = 32;
+    int bayInteriorH = 12;
+    int bayW = bayInteriorW + 2; // +2 for walls
     int bayH = bayInteriorH + 2;
     int bayX = (gridWidth - bayW) / 2;
     int bayY = 2; // rows 0-1 empty for ships
 
     PlacedRoom bay;
-    bay.type = RoomType::DOCKING_BAY;
+    bay.type = RoomType::LANDING_BAY;
     bay.x = bayX;
     bay.y = bayY;
     bay.width = bayW;
     bay.height = bayH;
     placeRoomWalls(bay);
 
-    // Place 3 docking collars evenly across the north wall.
-    // Each collar gets: C on north wall, D airlock door below, T terminals nearby.
-    // The airlock door needs walls on both sides — we create small wall stubs
-    // that extend only 1 cell deep, not partitioning the entire bay.
-    int spacing = bayInteriorW / 3;
-    for (int i = 0; i < 3; i++) {
-        int collarX = bay.interiorX() + spacing / 2 + i * spacing;
+    // Replace north wall with HANGAR_DOOR cells (keep 2 wall cells on each corner)
+    for (int x = bayX + 2; x < bayX + bayW - 2; x++) {
+        setGrid(x, bayY, CellType::HANGAR_DOOR);
+    }
 
-        // Collar on the north wall — replaces the wall cell
-        setGrid(collarX, bayY, CellType::DOCKING_COLLAR);
+    // Place 4 landing pads inside the bay.
+    // Each pad is 5 cells wide × 6 cells tall (fits LARGE ship: 5×6 cells).
+    // Layout (within interior, y=0 is first interior row):
+    //   y=0..1: Floor (approach clearance from hangar door to pads)
+    //   y=2..7: Landing pads (6 rows)
+    //   y=8..11: Floor (walkway for cargo access below pads)
+    //
+    // Pad X positions (within interior):
+    //   Pad 0: x=3..7    Pad 1: x=10..14
+    //   Pad 2: x=17..21  Pad 3: x=24..28
+    // (3-cell edge margins, 2-cell walkways between pads)
 
-        // Airlock door directly below collar (row bayY + 1 = first interior row)
-        setGrid(collarX, bayY + 1, CellType::DOOR);
+    int padWidth = 5;
+    int padHeight = 6;
+    int padStartY = bay.interiorY() + 2; // 2 rows of floor below hangar door
+    int padXPositions[] = { 3, 10, 17, 24 };
 
-        // Wall stubs flanking the door (1 cell deep only)
-        setGrid(collarX - 1, bayY + 1, CellType::WALL);
-        setGrid(collarX + 1, bayY + 1, CellType::WALL);
-
-        // Terminals flanking the airlock (row bayY + 2)
-        setGrid(collarX - 1, bayY + 2, CellType::TERMINAL);
-        setGrid(collarX + 1, bayY + 2, CellType::TERMINAL);
-
-        // Airlock tile directly below the door
-        setGrid(collarX, bayY + 2, CellType::AIRLOCK);
+    for (int p = 0; p < 4; p++) {
+        int padX = bay.interiorX() + padXPositions[p];
+        for (int py = padStartY; py < padStartY + padHeight; py++) {
+            for (int px = padX; px < padX + padWidth; px++) {
+                setGrid(px, py, CellType::LANDING_PAD);
+            }
+        }
     }
 
     rooms.push_back(bay);
@@ -170,7 +179,8 @@ void StationGenerator::furnishRoom(const PlacedRoom& room) {
         case RoomType::ENGINEERING:    furnishEngineering(room); break;
         case RoomType::MEDBAY:         furnishMedbay(room); break;
         case RoomType::CREW_QUARTERS:  furnishCrewQuarters(room); break;
-        default: break; // docking bay already furnished
+        case RoomType::REFINERY:       furnishRefinery(room); break;
+        default: break; // landing bay already furnished
     }
 }
 
@@ -243,6 +253,18 @@ void StationGenerator::furnishCrewQuarters(const PlacedRoom& room) {
     }
 }
 
+void StationGenerator::furnishRefinery(const PlacedRoom& room) {
+    // Left half of interior: REFINERY cells (input — drop raw materials here)
+    // Right half of interior: FLOOR cells (output — processed cargo appears here)
+    int halfW = room.interiorW() / 2;
+    for (int y = room.interiorY(); y < room.interiorY() + room.interiorH(); y++) {
+        for (int x = room.interiorX(); x < room.interiorX() + halfW; x++) {
+            setGrid(x, y, CellType::REFINERY);
+        }
+        // Right half stays as FLOOR (already placed by placeRoomWalls)
+    }
+}
+
 // =========================================================================
 // Corridor connection (MST + extra edges)
 // =========================================================================
@@ -301,12 +323,12 @@ void StationGenerator::connectAllRooms() {
 }
 
 void StationGenerator::connectRooms(const PlacedRoom& a, const PlacedRoom& b) {
-    // Use corridor exit point: for docking bay, use the south edge center
+    // Use corridor exit point: for landing bay, use the south edge center
     // so corridors don't carve through the middle of the bay
     int ax = a.centerX();
-    int ay = (a.type == RoomType::DOCKING_BAY) ? a.y + a.height - 1 : a.centerY();
+    int ay = (a.type == RoomType::LANDING_BAY) ? a.y + a.height - 1 : a.centerY();
     int bx = b.centerX();
-    int by = (b.type == RoomType::DOCKING_BAY) ? b.y + b.height - 1 : b.centerY();
+    int by = (b.type == RoomType::LANDING_BAY) ? b.y + b.height - 1 : b.centerY();
 
     // L-shaped corridor: randomly choose horizontal-first or vertical-first
     bool hFirst = (rng() % 2 == 0);
@@ -425,7 +447,9 @@ bool StationGenerator::validateConnectivity() {
         CellType c = getGrid(x, y);
         return c == CellType::FLOOR || c == CellType::DOOR || c == CellType::TERMINAL ||
                c == CellType::SPAWN_POINT || c == CellType::AIRLOCK || c == CellType::STORAGE ||
-               c == CellType::DOCKING_COLLAR;
+               c == CellType::DOCKING_COLLAR || c == CellType::LANDING_PAD ||
+               c == CellType::HANGAR_DOOR || c == CellType::REFINERY ||
+               c == CellType::TURRET_BASE;
     };
 
     while (!bfsQueue.empty()) {
@@ -496,8 +520,8 @@ void StationGenerator::trimAndCommit(StationMap& map) {
 
     if (minX > maxX) return; // empty map somehow
 
-    // Add 2 rows of padding above for ship approach
-    int padTop = 2;
+    // Add 14 rows of padding above for ship approach (ships spawn 400px = ~13 cells above pads)
+    int padTop = 14;
     int startY = (std::max)(0, minY - padTop);
     int startX = (std::max)(0, minX - 1); // 1 col padding on sides
     int endX = (std::min)(gridWidth - 1, maxX + 1);
@@ -520,6 +544,77 @@ void StationGenerator::trimAndCommit(StationMap& map) {
 }
 
 // =========================================================================
+// Turret placement on exterior walls
+// =========================================================================
+
+void StationGenerator::placeTurrets() {
+    // Find all WALL cells that face EMPTY (exterior-facing)
+    struct TurretCandidate {
+        int x, y;
+    };
+    std::vector<TurretCandidate> candidates;
+
+    for (int y = 1; y < gridHeight - 1; y++) {
+        for (int x = 1; x < gridWidth - 1; x++) {
+            if (getGrid(x, y) != CellType::WALL) continue;
+
+            // Must have at least one EMPTY neighbor (exterior-facing)
+            bool hasEmpty = (getGrid(x - 1, y) == CellType::EMPTY) ||
+                            (getGrid(x + 1, y) == CellType::EMPTY) ||
+                            (getGrid(x, y - 1) == CellType::EMPTY) ||
+                            (getGrid(x, y + 1) == CellType::EMPTY);
+            if (!hasEmpty) continue;
+
+            // Skip corners (walls with EMPTY on two adjacent sides)
+            int emptyCount = 0;
+            if (getGrid(x - 1, y) == CellType::EMPTY) emptyCount++;
+            if (getGrid(x + 1, y) == CellType::EMPTY) emptyCount++;
+            if (getGrid(x, y - 1) == CellType::EMPTY) emptyCount++;
+            if (getGrid(x, y + 1) == CellType::EMPTY) emptyCount++;
+            if (emptyCount > 2) continue;
+
+            // Skip hangar door area (top of landing bay)
+            if (!rooms.empty() && rooms[0].type == RoomType::LANDING_BAY) {
+                const auto& bay = rooms[0];
+                if (y == bay.y && x >= bay.x && x < bay.x + bay.width) continue;
+            }
+
+            candidates.push_back({x, y});
+        }
+    }
+
+    if (candidates.empty()) return;
+
+    // Place turrets at intervals along the perimeter
+    // Shuffle candidates and pick every ~10th one
+    std::shuffle(candidates.begin(), candidates.end(), rng);
+
+    int targetCount = (std::max)(6, (std::min)(12, static_cast<int>(candidates.size()) / 10));
+    int placed = 0;
+
+    for (auto& c : candidates) {
+        if (placed >= targetCount) break;
+
+        // Check minimum distance from already-placed turrets
+        bool tooClose = false;
+        for (int ty = c.y - 6; ty <= c.y + 6 && !tooClose; ty++) {
+            for (int tx = c.x - 6; tx <= c.x + 6; tx++) {
+                if (getGrid(tx, ty) == CellType::TURRET_BASE) {
+                    tooClose = true;
+                    break;
+                }
+            }
+        }
+        if (tooClose) continue;
+
+        setGrid(c.x, c.y, CellType::TURRET_BASE);
+        placed++;
+    }
+
+    std::cout << "[GENERATOR] Placed " << placed << " turret bases" << std::endl;
+}
+
+// =========================================================================
 // Main generate() orchestrator
 // =========================================================================
 
@@ -530,12 +625,12 @@ bool StationGenerator::generate(StationMap& map, uint32_t seed) {
     rng.seed(seed);
     std::cout << "[GENERATOR] Generating station with seed " << seed << std::endl;
 
-    // Phase 1: Initialize grid
-    initGrid(60, 50);
+    // Phase 1: Initialize grid (larger to fit landing bay + rooms)
+    initGrid(90, 70);
 
-    // Phase 2: Place docking bay at top
-    placeDockingBay();
-    int belowDockingBay = rooms[0].y + rooms[0].height;
+    // Phase 2: Place landing bay at top
+    placeLandingBay();
+    int belowLandingBay = rooms[0].y + rooms[0].height;
 
     // Phase 3: Place remaining rooms
     std::vector<RoomDef> roomDefs = {
@@ -545,15 +640,16 @@ bool StationGenerator::generate(StationMap& map, uint32_t seed) {
         {RoomType::ENGINEERING,    5, 5,  8, 6},
         {RoomType::MEDBAY,         4, 4,  6, 5},
         {RoomType::CREW_QUARTERS,  5, 4,  7, 5},
+        {RoomType::REFINERY,       6, 5,  8, 6},
     };
 
     for (auto& def : roomDefs) {
-        if (!tryPlaceRoom(def, belowDockingBay)) {
+        if (!tryPlaceRoom(def, belowLandingBay)) {
             // Try again with smaller size
             RoomDef smaller = def;
             smaller.maxWidth = smaller.minWidth;
             smaller.maxHeight = smaller.minHeight;
-            if (!tryPlaceRoom(smaller, belowDockingBay)) {
+            if (!tryPlaceRoom(smaller, belowLandingBay)) {
                 std::cout << "[GENERATOR] Warning: Could not place room type "
                           << static_cast<int>(def.type) << std::endl;
             }
@@ -571,12 +667,15 @@ bool StationGenerator::generate(StationMap& map, uint32_t seed) {
         furnishRoom(room);
     }
 
-    // Phase 7: Validate connectivity
+    // Phase 7: Place turrets on exterior walls
+    placeTurrets();
+
+    // Phase 8: Validate connectivity
     if (!validateConnectivity()) {
         std::cout << "[GENERATOR] Fixed connectivity issues" << std::endl;
     }
 
-    // Ensure at least some spawn points exist
+    // Phase 9: Ensure at least some spawn points exist
     {
         bool hasSpawn = false;
         for (int y = 0; y < gridHeight && !hasSpawn; y++) {

@@ -3,8 +3,60 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#include <queue>
+#include <set>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 namespace ssm {
+
+// Discover landing pad clusters from map cells via flood fill
+static std::vector<LandingPadInfo> discoverPadsFromMap(const StationMap& map) {
+    auto padCells = map.findCells(CellType::LANDING_PAD);
+    if (padCells.empty()) return {};
+
+    std::set<std::pair<int,int>> remaining(padCells.begin(), padCells.end());
+    std::vector<LandingPadInfo> pads;
+
+    while (!remaining.empty()) {
+        std::queue<std::pair<int,int>> q;
+        auto start = *remaining.begin();
+        q.push(start);
+        remaining.erase(remaining.begin());
+
+        float sumX = 0, sumY = 0;
+        int count = 0;
+
+        while (!q.empty()) {
+            auto [cx, cy] = q.front();
+            q.pop();
+            sumX += cx;
+            sumY += cy;
+            count++;
+
+            int dx[] = {-1, 1, 0, 0};
+            int dy[] = {0, 0, -1, 1};
+            for (int d = 0; d < 4; d++) {
+                std::pair<int,int> neighbor = {cx + dx[d], cy + dy[d]};
+                auto it = remaining.find(neighbor);
+                if (it != remaining.end()) {
+                    q.push(neighbor);
+                    remaining.erase(it);
+                }
+            }
+        }
+
+        LandingPadInfo pad;
+        pad.centerX = (sumX / count + 0.5f) * CELL_SIZE;
+        pad.centerY = (sumY / count + 0.5f) * CELL_SIZE;
+        pads.push_back(pad);
+    }
+
+    std::cout << "[SERVER] Discovered " << pads.size() << " landing pads" << std::endl;
+    return pads;
+}
 
 GameWorld::~GameWorld() {
     for (auto* obj : objects) delete obj;
@@ -19,9 +71,9 @@ bool GameWorld::init(const std::string& mapFile) {
 
     buildMapObjects();
 
-    // Initialize ship manager with docking collars
-    auto collars = findObjectsOfType<DockingCollar>();
-    shipManager.init(collars, [this]() { return generateId(); });
+    // Initialize ship manager with discovered landing pads
+    auto pads = discoverPadsFromMap(map);
+    shipManager.init(pads, [this]() { return generateId(); });
 
     // Wire economy callback
     shipManager.onMoneyChange = [this](int32_t delta, bool happy) {
@@ -45,9 +97,9 @@ bool GameWorld::initGenerated(uint32_t seed) {
 
     buildMapObjects();
 
-    // Initialize ship manager with docking collars
-    auto collars = findObjectsOfType<DockingCollar>();
-    shipManager.init(collars, [this]() { return generateId(); });
+    // Initialize ship manager with discovered landing pads
+    auto pads = discoverPadsFromMap(map);
+    shipManager.init(pads, [this]() { return generateId(); });
 
     // Wire economy callback
     shipManager.onMoneyChange = [this](int32_t delta, bool happy) {
@@ -56,6 +108,16 @@ bool GameWorld::initGenerated(uint32_t seed) {
                   << "), money delta: " << (delta >= 0 ? "+" : "") << delta
                   << ", total: " << stationMoney << std::endl;
     };
+
+    // Initialize wall HP tracking
+    map.initWallHP();
+
+    // Initialize enemy manager
+    enemyManager.init([this]() { return generateId(); });
+
+    // Calculate station center
+    stationCenterX = (map.width / 2.0f) * CELL_SIZE;
+    stationCenterY = (map.height / 2.0f) * CELL_SIZE;
 
     std::cout << "World initialized (generated) with " << objects.size()
               << " objects, starting money: " << stationMoney << std::endl;
@@ -116,6 +178,41 @@ void GameWorld::buildMapObjects() {
                     objects.push_back(collar);
                     break;
                 }
+                case CellType::LANDING_PAD:
+                case CellType::REFINERY: {
+                    auto* floor = new Floor(generateId(), wx, wy);
+                    objects.push_back(floor);
+                    break;
+                }
+                case CellType::HANGAR_DOOR: {
+                    // Create a floor underneath and a hangar door on top
+                    auto* floor = new Floor(generateId(), wx, wy);
+                    objects.push_back(floor);
+                    auto* door = new Door(generateId(), wx, wy);
+                    door->isHangarDoor = true;
+                    door->orientation = 0; // opens horizontally (splits left/right)
+                    objects.push_back(door);
+                    doorInfos.push_back({door, lx, ly});
+                    break;
+                }
+                case CellType::TURRET_BASE: {
+                    auto* floor = new Floor(generateId(), wx, wy);
+                    objects.push_back(floor);
+                    // Determine facing direction (toward nearest EMPTY neighbor)
+                    float facingAngle = 0.0f;
+                    if (map.getCell(lx, ly - 1) == CellType::EMPTY) facingAngle = static_cast<float>(-M_PI / 2.0); // up
+                    else if (map.getCell(lx, ly + 1) == CellType::EMPTY) facingAngle = static_cast<float>(M_PI / 2.0); // down
+                    else if (map.getCell(lx - 1, ly) == CellType::EMPTY) facingAngle = static_cast<float>(M_PI); // left
+                    else if (map.getCell(lx + 1, ly) == CellType::EMPTY) facingAngle = 0.0f; // right
+
+                    // Alternate turret types based on position
+                    TurretType ttype = ((lx + ly) % 2 == 0) ? TurretType::ENERGY : TurretType::KINETIC;
+                    // Center larger turret on the grid cell
+                    float turretOffset = (CELL_SIZE * 1.5f - CELL_SIZE) / 2.0f;
+                    auto* turret = new Turret(generateId(), wx - turretOffset, wy - turretOffset, ttype, facingAngle);
+                    objects.push_back(turret);
+                    break;
+                }
                 case CellType::TERMINAL: {
                     auto* floor = new Floor(generateId(), wx, wy);
                     objects.push_back(floor);
@@ -153,7 +250,7 @@ void GameWorld::buildMapObjects() {
         }
     }
 
-    // Third pass: link docking collars to nearest door (airlock) and mark those doors
+    // Third pass: link docking collars to nearest door (legacy) and mark airlock doors
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::DOCKING_COLLAR && obj->active) {
             auto* collar = static_cast<DockingCollar*>(obj);
@@ -162,6 +259,7 @@ void GameWorld::buildMapObjects() {
             Door* nearestDoor = nullptr;
             float nearestDist = 999999.0f;
             for (auto& di : doorInfos) {
+                if (di.door->isHangarDoor) continue; // skip hangar doors
                 float dx = static_cast<float>(collarGX - di.gridX);
                 float dy = static_cast<float>(collarGY - di.gridY);
                 float dist = std::sqrt(dx * dx + dy * dy);
@@ -201,6 +299,16 @@ void GameWorld::update(float dt) {
     auto dockedShips = getDockedShips();
     for (auto& [clientIdx, player] : playersByClientIndex) {
         if (!player->active) continue;
+
+        // Skip movement for players operating turrets
+        if (player->isInTurret()) {
+            // Still handle interaction for turret exit
+            if (player->interacting) {
+                handleInteraction(player);
+                player->interacting = false;
+            }
+            continue;
+        }
 
         // Count tethered cargo for speed penalty
         int tetheredCount = 0;
@@ -457,6 +565,9 @@ void GameWorld::update(float dt) {
             if (obj->type != GameObjectType::DOOR || !obj->active) continue;
             auto* door = static_cast<Door*>(obj);
 
+            // Hangar doors are controlled by ship manager, skip them here
+            if (door->isHangarDoor) continue;
+
             float doorCX = door->x + door->width / 2.0f;
             float doorCY = door->y + door->height / 2.0f;
 
@@ -516,8 +627,190 @@ void GameWorld::update(float dt) {
         }
     }
 
-    // Update ships
+    // Update ships (must happen before hangar door control so needsHangarOpen is fresh)
     shipManager.update(dt, objects);
+
+    // Control hangar doors based on ship approach/departure
+    {
+        constexpr float HANGAR_DOOR_SPEED = 3.0f; // slower than regular doors for dramatic effect
+        bool needOpen = shipManager.needsHangarOpen();
+
+        for (auto* obj : objects) {
+            if (obj->type != GameObjectType::DOOR || !obj->active) continue;
+            auto* door = static_cast<Door*>(obj);
+            if (!door->isHangarDoor) continue;
+
+            if (needOpen) {
+                door->state = DoorState::OPEN;
+                door->openAmount += HANGAR_DOOR_SPEED * dt;
+                if (door->openAmount > 1.0f) door->openAmount = 1.0f;
+            } else {
+                door->openAmount -= HANGAR_DOOR_SPEED * dt;
+                if (door->openAmount < 0.0f) {
+                    door->openAmount = 0.0f;
+                    door->state = DoorState::CLOSED;
+                }
+            }
+        }
+    }
+
+    // Refinery processing: consume raw materials on REFINERY cells, produce fuel + food
+    {
+        constexpr float REFINERY_PROCESS_TIME = 3.0f; // seconds between processing
+        refineryTimer += dt;
+        if (refineryTimer >= REFINERY_PROCESS_TIME) {
+            refineryTimer -= REFINERY_PROCESS_TIME;
+
+            // Find first raw material cargo sitting on a REFINERY cell
+            Cargo* toProcess = nullptr;
+            for (auto* obj : objects) {
+                if (obj->type != GameObjectType::CARGO || !obj->active) continue;
+                auto* cargo = static_cast<Cargo*>(obj);
+                if (!cargo->isOnGround() || cargo->isTethered()) continue;
+                // Only process raw materials
+                if (cargo->cargoType != CargoType::ORE &&
+                    cargo->cargoType != CargoType::METAL &&
+                    cargo->cargoType != CargoType::CRYSTALS &&
+                    cargo->cargoType != CargoType::PLASMA) continue;
+
+                // Check if cargo is sitting on a REFINERY cell
+                int cgx = static_cast<int>(std::floor((cargo->x + cargo->width / 2.0f) / CELL_SIZE));
+                int cgy = static_cast<int>(std::floor((cargo->y + cargo->height / 2.0f) / CELL_SIZE));
+                if (map.getCell(cgx, cgy) == CellType::REFINERY) {
+                    toProcess = cargo;
+                    break;
+                }
+            }
+
+            if (toProcess) {
+                // Find a nearby FLOOR cell to spawn output (prefer non-REFINERY cells)
+                int srcGX = static_cast<int>(std::floor((toProcess->x + toProcess->width / 2.0f) / CELL_SIZE));
+                int srcGY = static_cast<int>(std::floor((toProcess->y + toProcess->height / 2.0f) / CELL_SIZE));
+
+                // Search in expanding rings for a FLOOR cell
+                int outGX = -1, outGY = -1;
+                for (int radius = 1; radius <= 8 && outGX < 0; radius++) {
+                    for (int dy2 = -radius; dy2 <= radius && outGX < 0; dy2++) {
+                        for (int dx2 = -radius; dx2 <= radius; dx2++) {
+                            if (std::abs(dx2) != radius && std::abs(dy2) != radius) continue;
+                            int nx = srcGX + dx2;
+                            int ny = srcGY + dy2;
+                            CellType nc = map.getCell(nx, ny);
+                            if (nc == CellType::FLOOR || nc == CellType::STORAGE) {
+                                outGX = nx;
+                                outGY = ny;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (outGX >= 0) {
+                    // Consume the raw material
+                    toProcess->active = false;
+
+                    // Spawn fuel and food cargo on the output cell
+                    float outWX = outGX * CELL_SIZE + 4.0f;
+                    float outWY = outGY * CELL_SIZE + 4.0f;
+                    auto* fuel = new Cargo(generateId(), outWX, outWY, CargoType::FUEL, 1);
+                    auto* food = new Cargo(generateId(), outWX + 12.0f, outWY, CargoType::FOOD, 1);
+                    objects.push_back(fuel);
+                    objects.push_back(food);
+
+                    std::cout << "[REFINERY] Processed " << static_cast<int>(toProcess->cargoType)
+                              << " -> fuel + food at (" << outGX << ", " << outGY << ")" << std::endl;
+                }
+            }
+        }
+    }
+
+    // Update turret cooldowns
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::TURRET && obj->active) {
+            auto* turret = static_cast<Turret*>(obj);
+            if (turret->fireCooldown > 0.0f) {
+                turret->fireCooldown -= dt;
+            }
+        }
+    }
+
+    // Update enemy waves
+    enemyManager.update(dt, objects, map, stationCenterX, stationCenterY);
+
+    // Update projectiles
+    for (auto* obj : objects) {
+        if (obj->type != GameObjectType::PROJECTILE || !obj->active) continue;
+        auto* proj = static_cast<Projectile*>(obj);
+
+        // Move projectile
+        proj->x += proj->velX * dt;
+        proj->y += proj->velY * dt;
+        proj->lifetime -= dt;
+        if (proj->lifetime <= 0.0f) {
+            proj->active = false;
+            continue;
+        }
+
+        float pcx = proj->x + proj->width / 2.0f;
+        float pcy = proj->y + proj->height / 2.0f;
+
+        if (proj->owner == ProjectileOwner::STATION) {
+            // Station projectiles hit station walls (don't fly over the station)
+            // Only check WALL, not TURRET_BASE (projectiles spawn on turret cells)
+            int gx = static_cast<int>(std::floor(pcx / CELL_SIZE));
+            int gy = static_cast<int>(std::floor(pcy / CELL_SIZE));
+            CellType cell = map.getCell(gx, gy);
+            if (cell == CellType::WALL) {
+                proj->active = false;
+                continue;
+            }
+
+            // Station projectiles hit enemy ships
+            for (auto* target : objects) {
+                if (target->type != GameObjectType::ENEMY_SHIP || !target->active) continue;
+                auto* enemy = static_cast<EnemyShip*>(target);
+                if (pcx >= enemy->x && pcx < enemy->x + enemy->width &&
+                    pcy >= enemy->y && pcy < enemy->y + enemy->height) {
+                    enemy->health -= proj->damage;
+                    proj->active = false;
+                    if (enemy->health <= 0.0f) {
+                        enemy->active = false;
+                        stationMoney += 50; // bounty for destroying enemy
+                    }
+                    break;
+                }
+            }
+        } else if (proj->owner == ProjectileOwner::ENEMY) {
+            // Enemy projectiles hit walls
+            int gx = static_cast<int>(std::floor(pcx / CELL_SIZE));
+            int gy = static_cast<int>(std::floor(pcy / CELL_SIZE));
+            CellType cell = map.getCell(gx, gy);
+
+            if (cell == CellType::WALL) {
+                int16_t hp = map.getWallHP(gx, gy);
+                hp -= static_cast<int16_t>(proj->damage);
+                proj->active = false;
+
+                if (hp <= 0) {
+                    // Wall destroyed - convert to floor
+                    map.setCell(gx, gy, CellType::FLOOR);
+                    map.setWallHP(gx, gy, 0);
+                    rebuildCellObjects(static_cast<int16_t>(gx), static_cast<int16_t>(gy),
+                                       CellType::WALL, CellType::FLOOR);
+                    if (onMapUpdateBroadcast) {
+                        onMapUpdateBroadcast(static_cast<int16_t>(gx), static_cast<int16_t>(gy), CellType::FLOOR);
+                    }
+                    std::cout << "[COMBAT] Wall destroyed at (" << gx << ", " << gy << ")" << std::endl;
+                } else {
+                    map.setWallHP(gx, gy, hp);
+                }
+            }
+            // Enemy projectiles also hit turrets
+            else if (cell == CellType::TURRET_BASE) {
+                proj->active = false; // absorbed by turret base
+            }
+        }
+    }
 
     // Clean up inactive objects (but keep them for a bit to let clients see them deactivate)
 }
@@ -578,6 +871,17 @@ void GameWorld::onPlayerDisconnect(uint32_t clientIndex) {
                 }
             }
         }
+        // Release turret if operating one
+        if (player->isInTurret()) {
+            for (auto* obj : objects) {
+                if (obj->id == player->operatingTurretId && obj->active) {
+                    auto* turret = static_cast<Turret*>(obj);
+                    turret->operatorId = 0;
+                    break;
+                }
+            }
+            player->operatingTurretId = 0;
+        }
         // Detach all tethered cargo
         for (auto* obj : objects) {
             if (obj->type == GameObjectType::CARGO && obj->active) {
@@ -616,6 +920,48 @@ void GameWorld::handleInteraction(Player* player) {
     std::cout << "[SERVER] Interact received from '" << player->name
               << "' at (" << centerX << ", " << centerY << ")"
               << (player->isCarrying() ? " [carrying cargo]" : "") << std::endl;
+
+    // If player is in a turret, exit it
+    if (player->isInTurret()) {
+        for (auto* obj : objects) {
+            if (obj->id == player->operatingTurretId && obj->active) {
+                auto* turret = static_cast<Turret*>(obj);
+                turret->operatorId = 0;
+                break;
+            }
+        }
+        player->operatingTurretId = 0;
+        std::cout << "[SERVER] Player '" << player->name << "' exited turret" << std::endl;
+        return;
+    }
+
+    // Check for nearby turret to enter (only when not carrying cargo)
+    if (!player->isCarrying()) {
+        Turret* nearestTurret = nullptr;
+        float nearestTurretDist = INTERACTION_RANGE;
+        for (auto* obj : objects) {
+            if (obj->type != GameObjectType::TURRET || !obj->active) continue;
+            auto* turret = static_cast<Turret*>(obj);
+            if (turret->isOccupied()) continue;
+            float dx = centerX - (turret->x + turret->width / 2.0f);
+            float dy = centerY - (turret->y + turret->height / 2.0f);
+            float dist = std::sqrt(dx * dx + dy * dy);
+            if (dist < nearestTurretDist) {
+                nearestTurretDist = dist;
+                nearestTurret = turret;
+            }
+        }
+        if (nearestTurret) {
+            player->operatingTurretId = nearestTurret->id;
+            nearestTurret->operatorId = player->id;
+            // Snap player to turret position
+            player->x = nearestTurret->x + (nearestTurret->width - player->width) / 2.0f;
+            player->y = nearestTurret->y + (nearestTurret->height - player->height) / 2.0f;
+            std::cout << "[SERVER] Player '" << player->name << "' entered turret "
+                      << nearestTurret->id << std::endl;
+            return;
+        }
+    }
 
     // Check for nearby airlock door to toggle FIRST (even when carrying cargo,
     // so the player can open/close airlocks while hauling supplies to ships)
@@ -787,6 +1133,29 @@ void GameWorld::handleCargoDropOrLoad(Player* player) {
         }
     }
 
+    // Check if near a kinetic turret that needs ammo (METAL cargo only)
+    if (cargo->cargoType == CargoType::METAL) {
+        for (auto* obj : objects) {
+            if (obj->type != GameObjectType::TURRET || !obj->active) continue;
+            auto* turret = static_cast<Turret*>(obj);
+            if (turret->turretType != TurretType::KINETIC) continue;
+            if (turret->ammo >= turret->maxAmmo) continue;
+
+            float tdx = centerX - (turret->x + turret->width / 2.0f);
+            float tdy = centerY - (turret->y + turret->height / 2.0f);
+            float tdist = std::sqrt(tdx * tdx + tdy * tdy);
+            if (tdist < INTERACTION_RANGE) {
+                // Reload turret
+                turret->ammo = (std::min)(static_cast<int16_t>(turret->ammo + 10), turret->maxAmmo);
+                cargo->active = false;
+                player->carryingCargoId = 0;
+                std::cout << "[SERVER] Player '" << player->name << "' reloaded turret "
+                          << turret->id << " (ammo=" << turret->ammo << ")" << std::endl;
+                return;
+            }
+        }
+    }
+
     // Otherwise just drop cargo on ground
     cargo->carriedByPlayerId = 0;
     cargo->x = player->x;
@@ -907,7 +1276,8 @@ void GameWorld::onCargoPlace(uint32_t clientIndex, float targetX, float targetY)
 
     if (cell != CellType::FLOOR && cell != CellType::STORAGE &&
         cell != CellType::SPAWN_POINT && cell != CellType::AIRLOCK &&
-        cell != CellType::DOOR) {
+        cell != CellType::DOOR && cell != CellType::LANDING_PAD &&
+        cell != CellType::REFINERY) {
         return; // can't place on walls, empty, terminals, etc.
     }
 
@@ -1029,6 +1399,24 @@ bool GameWorld::validateEdit(int16_t gridX, int16_t gridY, CellType newType) {
         }
     }
 
+    // 2b. Hangar door must be on station edge (same rule as docking collar)
+    if (newType == CellType::HANGAR_DOOR) {
+        bool hasEmptyNeighbor = false;
+        bool hasNonEmptyNeighbor = false;
+        int dx[] = {-1, 1, 0, 0};
+        int dy[] = {0, 0, -1, 1};
+        for (int i = 0; i < 4; i++) {
+            CellType neighbor = map.getCell(gridX + dx[i], gridY + dy[i]);
+            if (neighbor == CellType::EMPTY)
+                hasEmptyNeighbor = true;
+            else
+                hasNonEmptyNeighbor = true;
+        }
+        if (!hasEmptyNeighbor || !hasNonEmptyNeighbor) {
+            return false;
+        }
+    }
+
     // 3. Doors need walls on two opposite sides (horizontal or vertical corridor)
     if (newType == CellType::DOOR) {
         CellType left = map.getCell(gridX - 1, gridY);
@@ -1042,7 +1430,7 @@ bool GameWorld::validateEdit(int16_t gridX, int16_t gridY, CellType newType) {
         }
     }
 
-    // 4. Can't remove collar with docked ship
+    // 4. Can't remove collar with docked ship (legacy)
     CellType oldType = map.getCell(gridX, gridY);
     if (oldType == CellType::DOCKING_COLLAR && newType != CellType::DOCKING_COLLAR) {
         for (auto* obj : objects) {
@@ -1052,6 +1440,24 @@ bool GameWorld::validateEdit(int16_t gridX, int16_t gridY, CellType newType) {
                 int collarGY = static_cast<int>(std::floor(collar->y / CELL_SIZE));
                 if (collarGX == gridX && collarGY == gridY && collar->hasShip()) {
                     return false;
+                }
+            }
+        }
+    }
+
+    // 4b. Can't remove landing pad that has a ship docked on it
+    if (oldType == CellType::LANDING_PAD && newType != CellType::LANDING_PAD) {
+        float padCX = (gridX + 0.5f) * CELL_SIZE;
+        float padCY = (gridY + 0.5f) * CELL_SIZE;
+        for (auto* obj : objects) {
+            if (obj->type == GameObjectType::SHIP && obj->active) {
+                auto* ship = static_cast<Ship*>(obj);
+                if (ship->state != ShipState::GONE && ship->state != ShipState::DEPARTING) {
+                    // Check if this cell is under the ship
+                    if (padCX >= ship->x && padCX < ship->x + ship->width &&
+                        padCY >= ship->y && padCY < ship->y + ship->height) {
+                        return false;
+                    }
                 }
             }
         }
@@ -1072,13 +1478,10 @@ void GameWorld::removeObjectsAtGrid(int16_t gridX, int16_t gridY) {
             obj->type == GameObjectType::FLOOR ||
             obj->type == GameObjectType::DOOR ||
             obj->type == GameObjectType::TERMINAL ||
-            obj->type == GameObjectType::DOCKING_COLLAR) {
+            obj->type == GameObjectType::DOCKING_COLLAR ||
+            obj->type == GameObjectType::TURRET) {
 
             if (std::abs(obj->x - wx) < tolerance && std::abs(obj->y - wy) < tolerance) {
-                // If it's a docking collar, remove from ship manager
-                if (obj->type == GameObjectType::DOCKING_COLLAR) {
-                    shipManager.removeCollar(static_cast<DockingCollar*>(obj));
-                }
                 obj->active = false;
             }
         }
@@ -1089,6 +1492,12 @@ void GameWorld::rebuildCellObjects(int16_t gridX, int16_t gridY, CellType oldTyp
     // Remove existing objects at this grid position
     removeObjectsAtGrid(gridX, gridY);
 
+    // If a landing pad was removed, re-discover pads
+    if (oldType == CellType::LANDING_PAD && newType != CellType::LANDING_PAD) {
+        auto pads = discoverPadsFromMap(map);
+        shipManager.init(pads, [this]() { return generateId(); });
+    }
+
     float wx = gridX * CELL_SIZE;
     float wy = gridY * CELL_SIZE;
 
@@ -1097,6 +1506,7 @@ void GameWorld::rebuildCellObjects(int16_t gridX, int16_t gridY, CellType oldTyp
         case CellType::WALL: {
             auto* wall = new Wall(generateId(), wx, wy);
             objects.push_back(wall);
+            map.setWallHP(gridX, gridY, WALL_MAX_HP);
             break;
         }
         case CellType::FLOOR:
@@ -1146,7 +1556,45 @@ void GameWorld::rebuildCellObjects(int16_t gridX, int16_t gridY, CellType oldTyp
             objects.push_back(floor);
             auto* collar = new DockingCollar(generateId(), wx, wy);
             objects.push_back(collar);
-            shipManager.addCollar(collar);
+            break;
+        }
+        case CellType::LANDING_PAD: {
+            auto* floor = new Floor(generateId(), wx, wy);
+            objects.push_back(floor);
+            // Re-discover pads and update ship manager
+            {
+                auto pads = discoverPadsFromMap(map);
+                shipManager.init(pads, [this]() { return generateId(); });
+            }
+            break;
+        }
+        case CellType::HANGAR_DOOR: {
+            auto* floor = new Floor(generateId(), wx, wy);
+            objects.push_back(floor);
+            auto* door = new Door(generateId(), wx, wy);
+            door->isHangarDoor = true;
+            door->orientation = 0; // opens horizontally (splits left/right)
+            objects.push_back(door);
+            break;
+        }
+        case CellType::REFINERY: {
+            auto* floor = new Floor(generateId(), wx, wy);
+            objects.push_back(floor);
+            break;
+        }
+        case CellType::TURRET_BASE: {
+            auto* floor = new Floor(generateId(), wx, wy);
+            objects.push_back(floor);
+            // Determine facing direction
+            float facingAngle = 0.0f;
+            if (map.getCell(gridX, gridY - 1) == CellType::EMPTY) facingAngle = static_cast<float>(-M_PI / 2.0);
+            else if (map.getCell(gridX, gridY + 1) == CellType::EMPTY) facingAngle = static_cast<float>(M_PI / 2.0);
+            else if (map.getCell(gridX - 1, gridY) == CellType::EMPTY) facingAngle = static_cast<float>(M_PI);
+            else if (map.getCell(gridX + 1, gridY) == CellType::EMPTY) facingAngle = 0.0f;
+            TurretType ttype = ((gridX + gridY) % 2 == 0) ? TurretType::ENERGY : TurretType::KINETIC;
+            float turretOffset = (CELL_SIZE * 1.5f - CELL_SIZE) / 2.0f;
+            auto* turret = new Turret(generateId(), wx - turretOffset, wy - turretOffset, ttype, facingAngle);
+            objects.push_back(turret);
             break;
         }
         case CellType::EMPTY:
@@ -1155,6 +1603,74 @@ void GameWorld::rebuildCellObjects(int16_t gridX, int16_t gridY, CellType oldTyp
         default:
             break;
     }
+}
+
+// --- Turret Aim/Fire ---
+
+void GameWorld::onTurretAim(uint32_t clientIndex, float angle, bool firing) {
+    Player* player = findPlayer(clientIndex);
+    if (!player || !player->isInTurret()) return;
+
+    Turret* turret = nullptr;
+    for (auto* obj : objects) {
+        if (obj->id == player->operatingTurretId && obj->active) {
+            turret = static_cast<Turret*>(obj);
+            break;
+        }
+    }
+    if (!turret) {
+        player->operatingTurretId = 0;
+        return;
+    }
+
+    const auto& stats = getTurretStats(turret->turretType);
+
+    // Clamp aim angle to turret's facing direction ± halfAngle
+    float diff = angle - turret->facingAngle;
+    // Normalize to [-PI, PI]
+    while (diff > static_cast<float>(M_PI)) diff -= static_cast<float>(2.0 * M_PI);
+    while (diff < static_cast<float>(-M_PI)) diff += static_cast<float>(2.0 * M_PI);
+    if (diff > stats.halfAngle) diff = stats.halfAngle;
+    if (diff < -stats.halfAngle) diff = -stats.halfAngle;
+    turret->aimAngle = turret->facingAngle + diff;
+
+    // Fire if requested
+    if (firing && turret->fireCooldown <= 0.0f && turret->hasAmmo()) {
+        float tcx = turret->x + turret->width / 2.0f;
+        float tcy = turret->y + turret->height / 2.0f;
+        float dirX = std::cos(turret->aimAngle);
+        float dirY = std::sin(turret->aimAngle);
+
+        // Spawn projectile slightly in front of turret
+        float spawnX = tcx + dirX * CELL_SIZE * 0.6f - PROJECTILE_SIZE / 2.0f;
+        float spawnY = tcy + dirY * CELL_SIZE * 0.6f - PROJECTILE_SIZE / 2.0f;
+
+        auto* proj = new Projectile(generateId(), spawnX, spawnY,
+            ProjectileOwner::STATION,
+            dirX * stats.projSpeed, dirY * stats.projSpeed,
+            stats.damage, turret->id);
+        objects.push_back(proj);
+
+        turret->fireCooldown = 1.0f / stats.fireRate;
+
+        // Consume ammo for kinetic turrets
+        if (turret->ammo > 0) turret->ammo--;
+    }
+}
+
+void GameWorld::onTurretExit(uint32_t clientIndex) {
+    Player* player = findPlayer(clientIndex);
+    if (!player || !player->isInTurret()) return;
+
+    for (auto* obj : objects) {
+        if (obj->id == player->operatingTurretId && obj->active) {
+            auto* turret = static_cast<Turret*>(obj);
+            turret->operatorId = 0;
+            break;
+        }
+    }
+    player->operatingTurretId = 0;
+    std::cout << "[SERVER] Player '" << player->name << "' exited turret (via MSG_TURRET_EXIT)" << std::endl;
 }
 
 // Explicit template instantiations

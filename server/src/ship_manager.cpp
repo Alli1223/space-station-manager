@@ -4,10 +4,11 @@
 
 namespace ssm {
 
-void ShipManager::init(const std::vector<DockingCollar*>& collars, IdGenerator idGen) {
-    dockingCollars = collars;
+void ShipManager::init(const std::vector<LandingPadInfo>& pads, IdGenerator idGen) {
+    landingPads = pads;
     generateId = idGen;
     spawnTimer = 10.0f; // first ship arrives after 10 seconds
+    std::cout << "[ShipManager] Initialized with " << landingPads.size() << " landing pads" << std::endl;
 }
 
 void ShipManager::update(float dt, std::vector<GameObject*>& allObjects) {
@@ -17,10 +18,17 @@ void ShipManager::update(float dt, std::vector<GameObject*>& allObjects) {
         spawnTimer = spawnInterval;
     }
 
+    // Track whether hangar door needs to be open
+    hangarOpenNeeded = false;
+
     // Update all ships
     for (auto* obj : allObjects) {
         if (obj->type == GameObjectType::SHIP && obj->active) {
-            updateShip(static_cast<Ship*>(obj), dt, allObjects);
+            auto* ship = static_cast<Ship*>(obj);
+            if (ship->state == ShipState::APPROACHING || ship->state == ShipState::DEPARTING) {
+                hangarOpenNeeded = true;
+            }
+            updateShip(ship, dt, allObjects);
         }
     }
 }
@@ -34,34 +42,61 @@ ShipClass ShipManager::rollShipClass() {
 }
 
 void ShipManager::spawnShip(std::vector<GameObject*>& allObjects) {
-    DockingCollar* collar = findFreeCollar();
-    if (!collar) {
-        std::cout << "No free docking collar available" << std::endl;
+    LandingPadInfo* pad = findFreePad();
+    if (!pad) {
+        std::cout << "No free landing pad available" << std::endl;
         return;
     }
 
     ShipClass sc = rollShipClass();
+    const auto& stats = getShipClassStats(sc);
 
-    auto* ship = new Ship(generateId(), collar->x, collar->y - 400.0f);
+    // Spawn far away from a random direction
+    std::uniform_real_distribution<float> angleDist(0.0f, 6.283185f);
+    float angle = angleDist(rng);
+    float spawnDist = 2000.0f; // spawn very far from the pad
+    float spawnX = pad->centerX + std::cos(angle) * spawnDist - stats.width / 2.0f;
+    float spawnY = pad->centerY + std::sin(angle) * spawnDist - stats.height / 2.0f;
+
+    auto* ship = new Ship(generateId(), spawnX, spawnY);
     ship->applyClassStats(sc);
-    ship->targetCollarId = collar->id;
-    ship->targetX = collar->x - (ship->width - CELL_SIZE) / 2.0f;
-    ship->targetY = collar->y - ship->height;
+    ship->targetCollarId = 0; // unused in landing pad system
+    ship->targetX = pad->centerX - ship->width / 2.0f;
+    ship->targetY = pad->centerY - ship->height / 2.0f;
     ship->state = ShipState::APPROACHING;
+    ship->departAngle = angle; // remember arrival angle for departure
     ship->fuel = 0.0f;
     ship->food = 0.0f;
 
+    // 30% chance: refuelling-only ship (no cargo to unload, just needs fuel + food)
+    std::uniform_int_distribution<int> refuelDist(0, 99);
+    bool refuelOnly = (refuelDist(rng) < 30);
+    if (refuelOnly) {
+        ship->metalToUnload = 0;
+        ship->oreToUnload = 0;
+        ship->crystalsToUnload = 0;
+        ship->plasmaToUnload = 0;
+        ship->totalMetal = 0;
+        ship->totalOre = 0;
+        ship->totalCrystals = 0;
+        ship->totalPlasma = 0;
+        // Give more patience since the task is simpler
+        ship->patienceTimer *= 1.5f;
+        ship->maxPatience *= 1.5f;
+    }
+
     allObjects.push_back(ship);
-    collar->dockedShipId = ship->id; // reserve the collar
+    pad->dockedShipId = ship->id; // reserve the pad
 
     std::cout << "Ship " << ship->id << " spawned (class " << static_cast<int>(sc)
-              << "), heading to collar " << collar->id << std::endl;
+              << (refuelOnly ? ", refuel-only" : "")
+              << "), heading to landing pad at (" << pad->centerX << ", " << pad->centerY << ")" << std::endl;
 }
 
 void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& allObjects) {
     switch (ship->state) {
         case ShipState::APPROACHING: {
-            // Move toward docking collar
+            // Move toward landing pad
             float dx = ship->targetX - ship->x;
             float dy = ship->targetY - ship->y;
             float dist = std::sqrt(dx * dx + dy * dy);
@@ -71,7 +106,7 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
                 ship->state = ShipState::DOCKING;
                 const auto& stats = getShipClassStats(ship->shipClass);
                 ship->stateTimer = stats.dockingTime;
-                std::cout << "Ship " << ship->id << " docking..." << std::endl;
+                std::cout << "Ship " << ship->id << " landing on pad..." << std::endl;
             } else {
                 float speed = getShipClassStats(ship->shipClass).approachSpeed;
                 ship->x += (dx / dist) * speed * dt;
@@ -83,31 +118,22 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
             ship->stateTimer -= dt;
             if (ship->stateTimer <= 0.0f) {
                 ship->state = ShipState::UNLOADING;
-                ship->stateTimer = 1.0f; // short delay before unloading
-
-                // Open the airlock door on the docking collar
-                DockingCollar* collar = findCollar(ship->targetCollarId);
-                if (collar) {
-                    setAirlockState(collar, allObjects, true);
-                }
-
-                std::cout << "Ship " << ship->id << " docked, airlock open, unloading..." << std::endl;
+                ship->stateTimer = 1.0f;
+                std::cout << "Ship " << ship->id << " landed, unloading cargo..." << std::endl;
             }
             break;
         }
         case ShipState::UNLOADING: {
             ship->stateTimer -= dt;
             if (ship->stateTimer <= 0.0f) {
-                // Spawn physical cargo objects inside the ship
                 unloadCargo(ship, allObjects);
                 ship->state = ShipState::WAITING_RESUPPLY;
-                std::cout << "Ship " << ship->id << " docked with physical cargo inside. "
-                          << "Waiting for player to tether and drag it out." << std::endl;
+                std::cout << "Ship " << ship->id << " landed with physical cargo inside. "
+                          << "Waiting for player to take cargo and resupply." << std::endl;
             }
             break;
         }
         case ShipState::WAITING_RESUPPLY: {
-            // Countdown patience timer
             ship->patienceTimer -= dt;
 
             // Happy departure: fully resupplied
@@ -115,17 +141,12 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
                 ship->state = ShipState::DEPARTING;
                 ship->stateTimer = 2.0f;
 
-                // Destroy any leftover cargo still inside the ship
                 destroyCargoInsideShip(ship, allObjects);
 
-                // Close the airlock door and free the docking collar
-                DockingCollar* collar = findCollar(ship->targetCollarId);
-                if (collar) {
-                    setAirlockState(collar, allObjects, false);
-                    collar->dockedShipId = 0;
-                }
+                // Free the landing pad
+                LandingPadInfo* pad = findPadForShip(ship->id);
+                if (pad) pad->dockedShipId = 0;
 
-                // Calculate payout based on ship class
                 int32_t payout = MEDIUM_SHIP_PAYOUT;
                 switch (ship->shipClass) {
                     case ShipClass::SMALL:  payout = SMALL_SHIP_PAYOUT; break;
@@ -134,32 +155,24 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
                 }
                 if (onMoneyChange) onMoneyChange(payout, true);
 
-                std::cout << "[SERVER] Ship " << ship->id << " departing HAPPY, payout +" << payout
-                          << ", airlock sealed" << std::endl;
+                std::cout << "[SERVER] Ship " << ship->id << " departing HAPPY, payout +" << payout << std::endl;
             }
             // Angry departure: patience ran out
             else if (ship->patienceTimer <= 0.0f) {
                 ship->state = ShipState::DEPARTING;
                 ship->stateTimer = 2.0f;
 
-                // Destroy any leftover cargo still inside the ship
                 destroyCargoInsideShip(ship, allObjects);
 
-                // Close the airlock door and free the docking collar
-                DockingCollar* collar = findCollar(ship->targetCollarId);
-                if (collar) {
-                    setAirlockState(collar, allObjects, false);
-                    collar->dockedShipId = 0;
-                }
+                LandingPadInfo* pad = findPadForShip(ship->id);
+                if (pad) pad->dockedShipId = 0;
 
-                // Calculate penalty — partial resupply gives scaled payout instead of full penalty
                 float fuelPct = (ship->maxFuel > 0) ? ship->fuel / ship->maxFuel : 1.0f;
                 float foodPct = (ship->maxFood > 0) ? ship->food / ship->maxFood : 1.0f;
                 float resupplyPct = (fuelPct + foodPct) / 2.0f;
 
                 int32_t delta;
                 if (resupplyPct > 0.1f) {
-                    // Partial resupply: scale payout proportionally
                     int32_t fullPayout = MEDIUM_SHIP_PAYOUT;
                     switch (ship->shipClass) {
                         case ShipClass::SMALL:  fullPayout = SMALL_SHIP_PAYOUT; break;
@@ -169,22 +182,27 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
                     delta = static_cast<int32_t>(fullPayout * resupplyPct * 0.5f);
                     if (delta < 1) delta = 0;
                 } else {
-                    // Nearly nothing supplied — full penalty
                     delta = ANGRY_DEPART_PENALTY;
                 }
                 if (onMoneyChange) onMoneyChange(delta, false);
 
-                std::cout << "[SERVER] Ship " << ship->id << " departing ANGRY (patience expired), delta "
-                          << delta << ", airlock sealed" << std::endl;
+                std::cout << "[SERVER] Ship " << ship->id << " departing ANGRY, delta " << delta << std::endl;
             }
             break;
         }
         case ShipState::DEPARTING: {
             float departSpeed = getShipClassStats(ship->shipClass).approachSpeed;
-            ship->y -= departSpeed * dt;
-            if (ship->y < -ship->height * 2) {
+            // Fly outward in the direction the ship arrived from
+            ship->x += std::cos(ship->departAngle) * departSpeed * dt;
+            ship->y += std::sin(ship->departAngle) * departSpeed * dt;
+            // Check if far enough from target to despawn
+            float ddx = ship->x - ship->targetX;
+            float ddy = ship->y - ship->targetY;
+            if (std::sqrt(ddx * ddx + ddy * ddy) > 2500.0f) {
                 ship->active = false;
                 ship->state = ShipState::GONE;
+                LandingPadInfo* pad = findPadForShip(ship->id);
+                if (pad) pad->dockedShipId = 0;
                 std::cout << "Ship " << ship->id << " gone" << std::endl;
             }
             break;
@@ -195,12 +213,10 @@ void ShipManager::updateShip(Ship* ship, float dt, std::vector<GameObject*>& all
 }
 
 void ShipManager::unloadCargo(Ship* ship, std::vector<GameObject*>& allObjects) {
-    // Spawn physical Cargo objects inside the ship interior in a grid layout
-    // Interior starts at (ship.x + 8, ship.y + 8) — 4px wall + 4px padding
     constexpr float WALL_PAD = 8.0f;
     constexpr float CARGO_SIZE = 16.0f;
     constexpr float CARGO_GAP = 4.0f;
-    constexpr float STRIDE = CARGO_SIZE + CARGO_GAP; // 20px
+    constexpr float STRIDE = CARGO_SIZE + CARGO_GAP;
 
     float interiorW = ship->width - WALL_PAD * 2.0f;
     int cols = static_cast<int>(interiorW / STRIDE);
@@ -232,7 +248,6 @@ void ShipManager::unloadCargo(Ship* ship, std::vector<GameObject*>& allObjects) 
                  ship->crystalsToUnload + ship->plasmaToUnload)
               << " physical cargo items inside ship " << ship->id << std::endl;
 
-    // Zero out virtual counts — totalMetal/etc stay for objectives panel
     ship->metalToUnload = 0;
     ship->oreToUnload = 0;
     ship->crystalsToUnload = 0;
@@ -240,18 +255,12 @@ void ShipManager::unloadCargo(Ship* ship, std::vector<GameObject*>& allObjects) 
 }
 
 void ShipManager::destroyCargoInsideShip(Ship* ship, std::vector<GameObject*>& allObjects) {
-    // Destroy any cargo objects that are still inside the ship bounds
-    // but NOT tethered or carried by a player (those were saved!)
     int destroyed = 0;
     for (auto* obj : allObjects) {
         if (obj->type != GameObjectType::CARGO || !obj->active) continue;
         auto* cargo = static_cast<Cargo*>(obj);
-
-        // Skip if a player is carrying or tethering this cargo
         if (cargo->carriedByPlayerId != 0) continue;
         if (cargo->tetheredToPlayerId != 0) continue;
-
-        // Check if cargo center is inside ship bounds
         float ccx = cargo->x + cargo->width / 2.0f;
         float ccy = cargo->y + cargo->height / 2.0f;
         if (ccx >= ship->x && ccx < ship->x + ship->width &&
@@ -281,47 +290,37 @@ bool ShipManager::loadCargoOntoShip(Ship* ship, Cargo* cargo) {
             cargo->active = false;
             return true;
         default:
-            return false; // ships don't accept materials back
+            return false;
     }
 }
 
-DockingCollar* ShipManager::findCollar(uint32_t collarId) {
-    for (auto* collar : dockingCollars) {
-        if (collar->id == collarId) return collar;
-    }
-    return nullptr;
-}
-
-DockingCollar* ShipManager::findFreeCollar() {
-    for (auto* collar : dockingCollars) {
-        if (!collar->hasShip()) return collar;
+LandingPadInfo* ShipManager::findFreePad() {
+    for (auto& pad : landingPads) {
+        if (pad.dockedShipId == 0) return &pad;
     }
     return nullptr;
 }
 
-void ShipManager::addCollar(DockingCollar* collar) {
-    dockingCollars.push_back(collar);
+LandingPadInfo* ShipManager::findPadForShip(uint32_t shipId) {
+    for (auto& pad : landingPads) {
+        if (pad.dockedShipId == shipId) return &pad;
+    }
+    return nullptr;
 }
 
-void ShipManager::removeCollar(DockingCollar* collar) {
-    for (auto it = dockingCollars.begin(); it != dockingCollars.end(); ++it) {
-        if (*it == collar) {
-            dockingCollars.erase(it);
+void ShipManager::addPad(const LandingPadInfo& pad) {
+    landingPads.push_back(pad);
+}
+
+bool ShipManager::needsHangarOpen() const {
+    return hangarOpenNeeded;
+}
+
+void ShipManager::removePadAt(float cx, float cy) {
+    for (auto it = landingPads.begin(); it != landingPads.end(); ++it) {
+        if (std::abs(it->centerX - cx) < CELL_SIZE && std::abs(it->centerY - cy) < CELL_SIZE) {
+            landingPads.erase(it);
             return;
-        }
-    }
-}
-
-void ShipManager::setAirlockState(DockingCollar* collar, std::vector<GameObject*>& allObjects, bool open) {
-    if (collar->linkedDoorId == 0) return;
-
-    for (auto* obj : allObjects) {
-        if (obj->id == collar->linkedDoorId && obj->type == GameObjectType::DOOR && obj->active) {
-            auto* door = static_cast<Door*>(obj);
-            door->state = open ? DoorState::OPEN : DoorState::CLOSED;
-            std::cout << "Airlock on collar " << collar->id
-                      << (open ? " opened" : " closed") << std::endl;
-            break;
         }
     }
 }

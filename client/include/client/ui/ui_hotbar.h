@@ -20,7 +20,7 @@ public:
 
 class UIHotbar : public UIElement {
 public:
-    static constexpr int SLOT_COUNT = 8;
+    static constexpr int SLOT_COUNT = 10;
     static constexpr float SLOT_SIZE = 48.0f;
     static constexpr float SLOT_PADDING = 4.0f;
 
@@ -50,10 +50,12 @@ private:
         CellType::FLOOR,
         CellType::DOOR,
         CellType::TERMINAL,
-        CellType::DOCKING_COLLAR,
+        CellType::LANDING_PAD,
+        CellType::HANGAR_DOOR,
         CellType::STORAGE,
         CellType::AIRLOCK,
-        CellType::SPAWN_POINT
+        CellType::SPAWN_POINT,
+        CellType::REFINERY
     };
 };
 

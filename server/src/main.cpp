@@ -92,6 +92,20 @@ int main(int argc, char* argv[]) {
         world.onTetherToggle(clientIndex, cargoId);
     };
 
+    network.onTurretAim = [&](uint32_t clientIndex, float angle, bool firing) {
+        world.onTurretAim(clientIndex, angle, firing);
+    };
+
+    network.onTurretExit = [&](uint32_t clientIndex) {
+        world.onTurretExit(clientIndex);
+    };
+
+    // Wire map update broadcast for wall destruction
+    world.onMapUpdateBroadcast = [&](int16_t gx, int16_t gy, ssm::CellType ct) {
+        auto update = ssm::buildMapUpdateMessage(gx, gy, ct);
+        network.broadcast(ssm::MessageType::MSG_MAP_UPDATE, update);
+    };
+
     if (!network.start(port)) {
         std::cerr << "Failed to start network server" << std::endl;
         return 1;

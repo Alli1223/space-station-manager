@@ -44,13 +44,16 @@ void InputHandler::update(GLFWwindow* window) {
     editTogglePressed = editKey && !prevEditKey;
     prevEditKey = editKey;
 
-    // Number keys 1-8
+    // Number keys 1-9 and 0 (for 10th slot)
     numberKeyPressed = -1;
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 9; i++) {
         if (glfwGetKey(window, GLFW_KEY_1 + i) == GLFW_PRESS) {
             numberKeyPressed = i;
             break;
         }
+    }
+    if (numberKeyPressed < 0 && glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS) {
+        numberKeyPressed = 9; // 0 key = 10th slot (index 9)
     }
 }
 

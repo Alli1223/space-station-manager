@@ -53,6 +53,9 @@ enum class GameObjectType : uint8_t {
     DOCKING_COLLAR,
     SHIP,
     CARGO,
+    TURRET,
+    PROJECTILE,
+    ENEMY_SHIP,
 };
 
 enum class CargoType : uint8_t {
@@ -113,6 +116,48 @@ inline const ShipClassStats& getShipClassStats(ShipClass sc) {
     }
     return medium;
 }
+
+// Turret types
+enum class TurretType : uint8_t {
+    ENERGY = 0,
+    KINETIC,
+};
+
+enum class ProjectileOwner : uint8_t {
+    STATION = 0,
+    ENEMY,
+};
+
+struct TurretStats {
+    float range;
+    float halfAngle;    // radians
+    float damage;
+    float fireRate;     // shots per second
+    float projSpeed;
+    int maxAmmo;        // -1 = unlimited
+};
+
+inline const TurretStats& getTurretStats(TurretType tt) {
+    static const TurretStats energy  { 400.0f, 0.524f, 25.0f, 2.0f, 600.0f, -1 };  // ~30 deg
+    static const TurretStats kinetic { 700.0f, 1.396f, 10.0f, 5.0f, 800.0f, 20 };  // ~80 deg
+    switch (tt) {
+        case TurretType::ENERGY:  return energy;
+        case TurretType::KINETIC: return kinetic;
+    }
+    return energy;
+}
+
+// Combat constants
+constexpr int16_t WALL_MAX_HP = 50;
+constexpr float ENEMY_WAVE_INITIAL_DELAY = 180.0f;
+constexpr float ENEMY_WAVE_INTERVAL = 120.0f;
+constexpr float ENEMY_SPEED = 40.0f;
+constexpr float ENEMY_FIRE_RATE = 0.8f;  // shots per second
+constexpr float ENEMY_DAMAGE = 15.0f;
+constexpr float ENEMY_HP = 100.0f;
+constexpr float ENEMY_FIRE_RANGE = 300.0f;
+constexpr float PROJECTILE_SIZE = 6.0f;
+constexpr float PROJECTILE_LIFETIME = 3.0f;
 
 // Simple byte buffer for serialization
 class ByteBuffer {

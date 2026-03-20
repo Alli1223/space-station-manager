@@ -4,6 +4,7 @@ add_executable(station_server
     src/network_server.cpp
     src/collision.cpp
     src/ship_manager.cpp
+    src/enemy_manager.cpp
 )
 
 target_include_directories(station_server PRIVATE include)

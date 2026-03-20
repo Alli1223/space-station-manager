@@ -109,6 +109,9 @@ GameObject* GameObject::createFromBuffer(ByteBuffer& buf) {
         case GameObjectType::DOCKING_COLLAR: obj = new DockingCollar(); break;
         case GameObjectType::SHIP:           obj = new Ship(); break;
         case GameObjectType::CARGO:          obj = new Cargo(); break;
+        case GameObjectType::TURRET:         obj = new Turret(); break;
+        case GameObjectType::PROJECTILE:     obj = new Projectile(); break;
+        case GameObjectType::ENEMY_SHIP:     obj = new EnemyShip(); break;
         default: return nullptr;
     }
     if (obj) {

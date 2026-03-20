@@ -203,6 +203,28 @@ void NetworkClient::sendTetherToggle(uint32_t cargoId) {
 #endif
 }
 
+void NetworkClient::sendTurretAim(float angle, bool firing) {
+    if (!connected) return;
+    auto payload = buildTurretAimMessage(angle, firing);
+    auto encoded = encodeMessage(MessageType::MSG_TURRET_AIM, payload);
+#ifdef _WIN32
+    send(sock, (const char*)encoded.data(), static_cast<int>(encoded.size()), 0);
+#else
+    send(sock, encoded.data(), encoded.size(), MSG_NOSIGNAL);
+#endif
+}
+
+void NetworkClient::sendTurretExit() {
+    if (!connected) return;
+    auto payload = buildTurretExitMessage();
+    auto encoded = encodeMessage(MessageType::MSG_TURRET_EXIT, payload);
+#ifdef _WIN32
+    send(sock, (const char*)encoded.data(), static_cast<int>(encoded.size()), 0);
+#else
+    send(sock, encoded.data(), encoded.size(), MSG_NOSIGNAL);
+#endif
+}
+
 void NetworkClient::setNonBlocking(SocketType s) {
 #ifdef _WIN32
     u_long mode = 1;

@@ -3,10 +3,12 @@
 #include "shared/game_object.h"
 #include "shared/game_objects.h"
 #include "shared/map.h"
+#include "client/bitmap_font.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <vector>
+#include <string>
 
 namespace ssm {
 
@@ -19,6 +21,8 @@ public:
     void endFrame();
 
     void setCamera(float x, float y);
+    void setZoom(float z) { zoom = z; }
+    float getZoom() const { return zoom; }
     float getCameraX() const { return cameraX; }
     float getCameraY() const { return cameraY; }
 
@@ -42,6 +46,15 @@ public:
     // Tether ropes (call in world space, after renderObjects)
     void renderTetherRopes(const std::vector<GameObject*>& objects);
 
+    // Text rendering (call in screen space)
+    void drawText(float x, float y, const std::string& text,
+                  float r, float g, float b, float a = 1.0f, float scale = 2.0f);
+    float measureText(const std::string& text, float scale = 2.0f) const;
+    float getTextHeight(float scale = 2.0f) const;
+
+    // Tooltip rendering (call after beginScreenSpace)
+    void renderTooltip(const std::string& title, const std::string& description);
+
     GLFWwindow* getWindow() const { return window; }
     int getWindowWidth() const { return windowWidth; }
     int getWindowHeight() const { return windowHeight; }
@@ -60,6 +73,7 @@ private:
     // Camera
     float cameraX = 0.0f;
     float cameraY = 0.0f;
+    float zoom = 1.0f; // <1 = zoomed out, >1 = zoomed in
 
     // Shader programs
     GLuint shaderProgram = 0;       // uniform-color shader (legacy, circles)
@@ -80,7 +94,11 @@ private:
 
     void drawRect(float x, float y, float w, float h, float r, float g, float b, float a = 1.0f);
     void drawCircle(float cx, float cy, float radius, float r, float g, float b);
+    void batchRotatedRect(float cx, float cy, float w, float h, float angle, float r, float g, float b, float a = 1.0f);
     glm::vec4 getColorForObject(const GameObject* obj) const;
+
+    // Bitmap font
+    BitmapFont font;
 
     // Frustum culling helper
     bool isOnScreen(float x, float y, float w, float h) const;

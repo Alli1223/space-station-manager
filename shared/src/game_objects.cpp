@@ -23,6 +23,7 @@ void Door::serialize(ByteBuffer& buf) const {
     buf.writeFloat(openAmount);
     buf.writeU8(orientation);
     buf.writeU8(isAirlock ? 1 : 0);
+    buf.writeU8(isHangarDoor ? 1 : 0);
 }
 void Door::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
@@ -30,6 +31,9 @@ void Door::deserialize(ByteBuffer& buf) {
     openAmount = buf.readFloat();
     orientation = buf.readU8();
     isAirlock = (buf.readU8() != 0);
+    if (buf.remaining() > 0) {
+        isHangarDoor = (buf.readU8() != 0);
+    }
 }
 
 // --- Terminal ---
@@ -118,6 +122,7 @@ void Ship::serialize(ByteBuffer& buf) const {
     buf.writeU8(passengers);
     buf.writeFloat(patienceTimer);
     buf.writeFloat(maxPatience);
+    buf.writeFloat(departAngle);
 }
 void Ship::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
@@ -142,6 +147,7 @@ void Ship::deserialize(ByteBuffer& buf) {
     passengers = buf.readU8();
     patienceTimer = buf.readFloat();
     maxPatience = buf.readFloat();
+    departAngle = buf.readFloat();
 }
 
 // --- Cargo ---
@@ -193,6 +199,7 @@ void Player::serialize(ByteBuffer& buf) const {
     buf.writeU8(colorIndex);
     buf.writeFloat(stamina);
     buf.writeFloat(maxStamina);
+    buf.writeU32(operatingTurretId);
 }
 void Player::deserialize(ByteBuffer& buf) {
     GameObject::deserialize(buf);
@@ -202,6 +209,108 @@ void Player::deserialize(ByteBuffer& buf) {
     colorIndex = buf.readU8();
     stamina = buf.readFloat();
     maxStamina = buf.readFloat();
+    if (buf.remaining() > 0) {
+        operatingTurretId = buf.readU32();
+    }
+}
+
+// --- Turret ---
+static constexpr float TURRET_SIZE = CELL_SIZE * 1.5f;
+
+Turret::Turret() {
+    type = GameObjectType::TURRET;
+    width = TURRET_SIZE;
+    height = TURRET_SIZE;
+}
+Turret::Turret(uint32_t id, float x, float y, TurretType ttype, float facing)
+    : GameObject(GameObjectType::TURRET, id, x, y), turretType(ttype),
+      aimAngle(facing), facingAngle(facing) {
+    width = TURRET_SIZE;
+    height = TURRET_SIZE;
+    const auto& stats = getTurretStats(ttype);
+    ammo = static_cast<int16_t>(stats.maxAmmo);
+    maxAmmo = static_cast<int16_t>(stats.maxAmmo);
+}
+
+void Turret::serialize(ByteBuffer& buf) const {
+    GameObject::serialize(buf);
+    buf.writeU8(static_cast<uint8_t>(turretType));
+    buf.writeFloat(aimAngle);
+    buf.writeFloat(facingAngle);
+    buf.writeU32(operatorId);
+    buf.writeI16(ammo);
+    buf.writeI16(maxAmmo);
+}
+void Turret::deserialize(ByteBuffer& buf) {
+    GameObject::deserialize(buf);
+    turretType = static_cast<TurretType>(buf.readU8());
+    aimAngle = buf.readFloat();
+    facingAngle = buf.readFloat();
+    operatorId = buf.readU32();
+    ammo = buf.readI16();
+    maxAmmo = buf.readI16();
+}
+
+// --- Projectile ---
+Projectile::Projectile() {
+    type = GameObjectType::PROJECTILE;
+    width = PROJECTILE_SIZE;
+    height = PROJECTILE_SIZE;
+}
+Projectile::Projectile(uint32_t id, float x, float y, ProjectileOwner own,
+                       float vx, float vy, float dmg, uint32_t source)
+    : GameObject(GameObjectType::PROJECTILE, id, x, y), owner(own),
+      velX(vx), velY(vy), damage(dmg), sourceId(source) {
+    width = PROJECTILE_SIZE;
+    height = PROJECTILE_SIZE;
+}
+
+void Projectile::serialize(ByteBuffer& buf) const {
+    GameObject::serialize(buf);
+    buf.writeU8(static_cast<uint8_t>(owner));
+    buf.writeFloat(velX);
+    buf.writeFloat(velY);
+    buf.writeFloat(damage);
+    buf.writeFloat(lifetime);
+    buf.writeU32(sourceId);
+}
+void Projectile::deserialize(ByteBuffer& buf) {
+    GameObject::deserialize(buf);
+    owner = static_cast<ProjectileOwner>(buf.readU8());
+    velX = buf.readFloat();
+    velY = buf.readFloat();
+    damage = buf.readFloat();
+    lifetime = buf.readFloat();
+    sourceId = buf.readU32();
+}
+
+// --- EnemyShip ---
+EnemyShip::EnemyShip() {
+    type = GameObjectType::ENEMY_SHIP;
+    width = 64.0f;
+    height = 48.0f;
+}
+EnemyShip::EnemyShip(uint32_t id, float x, float y)
+    : GameObject(GameObjectType::ENEMY_SHIP, id, x, y) {
+    width = 64.0f;
+    height = 48.0f;
+}
+
+void EnemyShip::serialize(ByteBuffer& buf) const {
+    GameObject::serialize(buf);
+    buf.writeFloat(health);
+    buf.writeFloat(maxHealth);
+    buf.writeFloat(targetX);
+    buf.writeFloat(targetY);
+    buf.writeU8(static_cast<uint8_t>(waveIndex));
+}
+void EnemyShip::deserialize(ByteBuffer& buf) {
+    GameObject::deserialize(buf);
+    health = buf.readFloat();
+    maxHealth = buf.readFloat();
+    targetX = buf.readFloat();
+    targetY = buf.readFloat();
+    waveIndex = buf.readU8();
 }
 
 } // namespace ssm

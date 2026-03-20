@@ -5,6 +5,7 @@
 #include "server/collision.h"
 #include "server/ship_manager.h"
 #include "server/network_server.h"
+#include "server/enemy_manager.h"
 #include <vector>
 #include <unordered_map>
 
@@ -32,6 +33,14 @@ public:
     // Tether toggle: player clicks cargo to attach/detach rope
     void onTetherToggle(uint32_t clientIndex, uint32_t cargoId);
 
+    // Turret controls
+    void onTurretAim(uint32_t clientIndex, float angle, bool firing);
+    void onTurretExit(uint32_t clientIndex);
+
+    // Map update broadcast callback (for wall destruction notifications)
+    using MapUpdateBroadcast = std::function<void(int16_t, int16_t, CellType)>;
+    MapUpdateBroadcast onMapUpdateBroadcast;
+
     // Build state snapshot for network
     ByteBuffer buildStateSnapshot();
     ByteBuffer buildWelcome(uint32_t playerId);
@@ -44,10 +53,14 @@ private:
     StationMap map;
     CollisionSystem collision;
     ShipManager shipManager;
+    EnemyManager enemyManager;
     std::vector<GameObject*> objects;
     std::unordered_map<uint32_t, Player*> playersByClientIndex;
     uint32_t nextId = 1;
     int32_t stationMoney = STARTING_MONEY;
+    float refineryTimer = 0.0f;
+    float stationCenterX = 0.0f;
+    float stationCenterY = 0.0f;
 
     uint32_t generateId() { return nextId++; }
 

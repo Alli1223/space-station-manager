@@ -38,6 +38,8 @@ public:
     using CellEditCallback = std::function<void(uint32_t clientIndex, int16_t gridX, int16_t gridY, CellType cellType)>;
     using CargoPlaceCallback = std::function<void(uint32_t clientIndex, float targetX, float targetY)>;
     using TetherToggleCallback = std::function<void(uint32_t clientIndex, uint32_t cargoId)>;
+    using TurretAimCallback = std::function<void(uint32_t clientIndex, float angle, bool firing)>;
+    using TurretExitCallback = std::function<void(uint32_t clientIndex)>;
 
     JoinCallback onJoin;
     InputCallback onInput;
@@ -45,6 +47,8 @@ public:
     CellEditCallback onCellEdit;
     CargoPlaceCallback onCargoPlace;
     TetherToggleCallback onTetherToggle;
+    TurretAimCallback onTurretAim;
+    TurretExitCallback onTurretExit;
 
     bool start(uint16_t port);
     void stop();

@@ -139,6 +139,11 @@ bool Renderer::init(int w, int h) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    if (!font.init()) {
+        std::cerr << "Failed to init bitmap font" << std::endl;
+        return false;
+    }
+
     return true;
 }
 
@@ -168,6 +173,7 @@ bool Renderer::createShaders() {
 }
 
 void Renderer::shutdown() {
+    font.shutdown();
     if (shaderProgram) glDeleteProgram(shaderProgram);
     if (batchShaderProgram) glDeleteProgram(batchShaderProgram);
     if (vao) glDeleteVertexArrays(1, &vao);
@@ -187,12 +193,14 @@ void Renderer::beginFrame() {
     glClearColor(0.05f, 0.05f, 0.1f, 1.0f); // dark space background
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // Set projection on both shaders
+    // Set projection on both shaders (zoom scales the view)
+    float halfW = (windowWidth / 2.0f) / zoom;
+    float halfH = (windowHeight / 2.0f) / zoom;
     glm::mat4 proj = glm::ortho(
-        cameraX - windowWidth / 2.0f,
-        cameraX + windowWidth / 2.0f,
-        cameraY + windowHeight / 2.0f,  // flip Y so Y-down
-        cameraY - windowHeight / 2.0f,
+        cameraX - halfW,
+        cameraX + halfW,
+        cameraY + halfH,  // flip Y so Y-down
+        cameraY - halfH,
         -1.0f, 1.0f
     );
 
@@ -228,6 +236,24 @@ void Renderer::batchRect(float x, float y, float w, float h, float r, float g, f
         x,     y,     r, g, b, a,
         x + w, y + h, r, g, b, a,
         x,     y + h, r, g, b, a,
+    };
+    batchVertices.insert(batchVertices.end(), v, v + 36);
+}
+
+void Renderer::batchRotatedRect(float cx, float cy, float w, float h, float angle, float r, float g, float b, float a) {
+    float hw = w / 2.0f;
+    float hh = h / 2.0f;
+    float cosA = std::cos(angle);
+    float sinA = std::sin(angle);
+    auto rx = [&](float lx, float ly) { return cx + lx * cosA - ly * sinA; };
+    auto ry = [&](float lx, float ly) { return cy + lx * sinA + ly * cosA; };
+    float x0 = rx(-hw, -hh), y0 = ry(-hw, -hh);
+    float x1 = rx( hw, -hh), y1 = ry( hw, -hh);
+    float x2 = rx( hw,  hh), y2 = ry( hw,  hh);
+    float x3 = rx(-hw,  hh), y3 = ry(-hw,  hh);
+    float v[] = {
+        x0, y0, r, g, b, a,  x1, y1, r, g, b, a,  x2, y2, r, g, b, a,
+        x0, y0, r, g, b, a,  x2, y2, r, g, b, a,  x3, y3, r, g, b, a,
     };
     batchVertices.insert(batchVertices.end(), v, v + 36);
 }
@@ -280,8 +306,8 @@ void Renderer::drawCircle(float cx, float cy, float radius, float r, float g, fl
 // =========================================================================
 
 bool Renderer::isOnScreen(float x, float y, float w, float h) const {
-    float halfW = windowWidth / 2.0f;
-    float halfH = windowHeight / 2.0f;
+    float halfW = (windowWidth / 2.0f) / zoom;
+    float halfH = (windowHeight / 2.0f) / zoom;
     return !(x + w < cameraX - halfW || x > cameraX + halfW ||
              y + h < cameraY - halfH || y > cameraY + halfH);
 }
@@ -291,8 +317,8 @@ bool Renderer::isOnScreen(float x, float y, float w, float h) const {
 // =========================================================================
 
 void Renderer::renderMap(const StationMap& map) {
-    float halfW = windowWidth / 2.0f;
-    float halfH = windowHeight / 2.0f;
+    float halfW = (windowWidth / 2.0f) / zoom;
+    float halfH = (windowHeight / 2.0f) / zoom;
 
     for (int ly = map.originY; ly < map.originY + map.height; ly++) {
         for (int lx = map.originX; lx < map.originX + map.width; lx++) {
@@ -322,6 +348,14 @@ void Renderer::renderMap(const StationMap& map) {
                     batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.55f, 0.6f, 0.55f); break;
                 case CellType::DOCKING_COLLAR:
                     batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.8f, 0.5f, 0.2f); break;
+                case CellType::LANDING_PAD:
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.5f, 0.55f, 0.65f); break;
+                case CellType::HANGAR_DOOR:
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.4f, 0.4f, 0.5f); break;
+                case CellType::REFINERY:
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.7f, 0.45f, 0.2f); break;
+                case CellType::TURRET_BASE:
+                    batchRect(wx, wy, CELL_SIZE, CELL_SIZE, 0.25f, 0.25f, 0.3f); break;
                 default: break;
             }
         }
@@ -376,7 +410,12 @@ void Renderer::renderObject(const GameObject* obj) {
 
         float t = door->openAmount;
         float doorR, doorG, doorB;
-        if (door->isAirlock) {
+        if (door->isHangarDoor) {
+            // Hangar doors: dark steel when closed, dim when open
+            doorR = 0.45f * (1.0f - t) + 0.25f * t;
+            doorG = 0.45f * (1.0f - t) + 0.25f * t;
+            doorB = 0.55f * (1.0f - t) + 0.3f * t;
+        } else if (door->isAirlock) {
             // Airlock doors: red-orange when closed, green when open
             doorR = 0.8f * (1.0f - t) + 0.2f * t;
             doorG = 0.25f * (1.0f - t) + 0.7f * t;
@@ -436,6 +475,77 @@ void Renderer::renderObject(const GameObject* obj) {
         return;
     }
 
+    if (obj->type == GameObjectType::TURRET) {
+        auto* turret = static_cast<const Turret*>(obj);
+        if (!isOnScreen(obj->x - 16, obj->y - 16, obj->width + 32, obj->height + 32)) return;
+
+        float cx = turret->x + turret->width / 2.0f;
+        float cy = turret->y + turret->height / 2.0f;
+
+        // Base square
+        float baseR = 0.25f, baseG = 0.25f, baseB = 0.3f;
+        if (turret->operatorId != 0) {
+            baseR = 0.3f; baseG = 0.35f; baseB = 0.4f;
+        }
+        batchRect(turret->x, turret->y, turret->width, turret->height, baseR, baseG, baseB);
+
+        // Barrel — rotated rect extending in aimAngle direction
+        float barrelW, barrelH, barrelR, barrelG, barrelB;
+        if (turret->turretType == TurretType::ENERGY) {
+            barrelW = 18.0f; barrelH = 8.0f;
+            barrelR = 0.2f; barrelG = 0.4f; barrelB = 1.0f;
+        } else {
+            barrelW = 24.0f; barrelH = 5.0f;
+            barrelR = 0.55f; barrelG = 0.55f; barrelB = 0.55f;
+        }
+        float offsetDist = barrelW / 2.0f;
+        float barrelCX = cx + std::cos(turret->aimAngle) * offsetDist;
+        float barrelCY = cy + std::sin(turret->aimAngle) * offsetDist;
+        batchRotatedRect(barrelCX, barrelCY, barrelW, barrelH, turret->aimAngle, barrelR, barrelG, barrelB);
+
+        // Ammo bar for kinetic turrets
+        if (turret->turretType == TurretType::KINETIC && turret->maxAmmo > 0) {
+            float ammoPct = static_cast<float>(turret->ammo) / static_cast<float>(turret->maxAmmo);
+            float barW = turret->width;
+            float barH = 3.0f;
+            batchRect(turret->x, turret->y + turret->height + 2.0f, barW, barH, 0.2f, 0.2f, 0.2f);
+            batchRect(turret->x, turret->y + turret->height + 2.0f, barW * ammoPct, barH, 0.6f, 0.6f, 0.7f);
+        }
+        return;
+    }
+
+    if (obj->type == GameObjectType::PROJECTILE) {
+        auto* proj = static_cast<const Projectile*>(obj);
+        if (!isOnScreen(obj->x, obj->y, obj->width, obj->height)) return;
+        float pr, pg, pb;
+        if (proj->owner == ProjectileOwner::STATION) {
+            pr = 1.0f; pg = 0.9f; pb = 0.3f;
+        } else {
+            pr = 1.0f; pg = 0.2f; pb = 0.1f;
+        }
+        batchRect(obj->x, obj->y, obj->width, obj->height, pr, pg, pb);
+        return;
+    }
+
+    if (obj->type == GameObjectType::ENEMY_SHIP) {
+        auto* enemy = static_cast<const EnemyShip*>(obj);
+        if (!isOnScreen(obj->x, obj->y, obj->width, obj->height)) return;
+        batchRect(obj->x, obj->y, obj->width, obj->height, 0.8f, 0.15f, 0.1f);
+        float wallT = 3.0f;
+        batchRect(obj->x + wallT, obj->y + wallT,
+                  obj->width - 2.0f * wallT, obj->height - 2.0f * wallT,
+                  0.5f, 0.1f, 0.08f);
+        if (enemy->health < enemy->maxHealth) {
+            float hpPct = enemy->health / enemy->maxHealth;
+            float barW = obj->width;
+            float barH = 4.0f;
+            batchRect(obj->x, obj->y - barH - 2.0f, barW, barH, 0.2f, 0.2f, 0.2f);
+            batchRect(obj->x, obj->y - barH - 2.0f, barW * hpPct, barH,
+                      1.0f - hpPct, hpPct, 0.1f);
+        }
+        return;
+    }
+
     // Generic objects (terminals, collars, cargo)
     if (!isOnScreen(obj->x, obj->y, obj->width, obj->height)) return;
     glm::vec4 color = getColorForObject(obj);
@@ -457,12 +567,18 @@ void Renderer::renderObjects(const std::vector<GameObject*>& objects) {
             renderObject(obj);
     }
 
-    // Layer 3: Ships (batched rects)
+    // Layer 3: Turrets (batched rects)
     for (auto* obj : objects) {
-        if (obj->type == GameObjectType::SHIP) renderObject(obj);
+        if (obj->type == GameObjectType::TURRET) renderObject(obj);
     }
 
-    // Layer 4: Cargo (batched rects)
+    // Layer 4: Ships + enemy ships (batched rects)
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::SHIP || obj->type == GameObjectType::ENEMY_SHIP)
+            renderObject(obj);
+    }
+
+    // Layer 5: Cargo (batched rects)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::CARGO) renderObject(obj);
     }
@@ -470,10 +586,16 @@ void Renderer::renderObjects(const std::vector<GameObject*>& objects) {
     // Flush all accumulated rects before drawing circles
     flushBatch();
 
-    // Layer 5: Players (circles — each is an individual draw call, but there are few)
+    // Layer 6: Players (circles — each is an individual draw call, but there are few)
     for (auto* obj : objects) {
         if (obj->type == GameObjectType::PLAYER) renderObject(obj);
     }
+
+    // Layer 7: Projectiles (on top of everything)
+    for (auto* obj : objects) {
+        if (obj->type == GameObjectType::PROJECTILE) renderObject(obj);
+    }
+    flushBatch();
 }
 
 void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject*>& objects, int32_t stationMoney) {
@@ -500,26 +622,13 @@ void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject
     // Money display
     {
         float moneyY = 34.0f;
-        batchRect(4.0f, moneyY, 12.0f, 12.0f, 1.0f, 0.85f, 0.2f);
-
-        float barX = 20.0f;
-        float barW = std::min(static_cast<float>(std::abs(stationMoney)) / 10.0f, 200.0f);
-        float barH = 8.0f;
-        float barY = moneyY + 2.0f;
-
-        batchRect(barX, barY, 200.0f, barH, 0.15f, 0.15f, 0.2f, 0.6f);
-
+        flushBatch();
+        std::string moneyStr = "$" + std::to_string(stationMoney);
+        float textScale = 1.5f;
         if (stationMoney >= 0) {
-            batchRect(barX, barY, barW, barH, 0.2f, 0.8f, 0.3f);
+            drawText(4.0f, moneyY, moneyStr, 0.2f, 0.9f, 0.3f, 1.0f, textScale);
         } else {
-            batchRect(barX, barY, barW, barH, 0.9f, 0.2f, 0.2f);
-        }
-
-        int pips = std::min(std::abs(stationMoney) / 100, 10);
-        for (int i = 0; i < pips; i++) {
-            float pipX = barX + i * 14.0f + 2.0f;
-            float pipY = moneyY + barH + 6.0f;
-            batchRect(pipX, pipY, 10.0f, 6.0f, 1.0f, 0.85f, 0.2f);
+            drawText(4.0f, moneyY, moneyStr, 0.9f, 0.2f, 0.2f, 1.0f, textScale);
         }
     }
 
@@ -545,6 +654,51 @@ void Renderer::renderHUD(const Player* localPlayer, const std::vector<GameObject
             // Small sprint icon (lightning bolt shape — just a small yellow rect as indicator)
             batchRect(staminaBarX + staminaBarW + 4.0f, staminaBarY - 1.0f, 4.0f, 8.0f, 1.0f, 0.9f, 0.2f, 0.8f);
         }
+    }
+
+    // Turret mode HUD
+    if (localPlayer->isInTurret()) {
+        const Turret* activeTurret = nullptr;
+        for (auto* obj : objects) {
+            if (obj->type == GameObjectType::TURRET && obj->id == localPlayer->operatingTurretId) {
+                activeTurret = static_cast<const Turret*>(obj);
+                break;
+            }
+        }
+        if (activeTurret) {
+            flushBatch();
+            float textScale = 2.0f;
+            std::string turretLabel;
+            if (activeTurret->turretType == TurretType::ENERGY) {
+                turretLabel = "ENERGY TURRET";
+            } else {
+                std::string ammoStr = std::to_string(activeTurret->ammo) + "/" + std::to_string(activeTurret->maxAmmo);
+                turretLabel = "KINETIC [" + ammoStr + "]";
+            }
+            float labelW = measureText(turretLabel, textScale);
+            float labelX = windowWidth / 2.0f - labelW / 2.0f;
+            // Background bar
+            batchRect(labelX - 8.0f, 6.0f, labelW + 16.0f, 22.0f, 0.1f, 0.1f, 0.15f, 0.8f);
+            flushBatch();
+            if (activeTurret->turretType == TurretType::ENERGY) {
+                drawText(labelX, 8.0f, turretLabel, 0.3f, 0.5f, 1.0f, 1.0f, textScale);
+            } else {
+                drawText(labelX, 8.0f, turretLabel, 0.7f, 0.7f, 0.75f, 1.0f, textScale);
+            }
+
+            // "Press E to exit" hint
+            std::string exitHint = "Press E to exit";
+            float hintW = measureText(exitHint, 1.5f);
+            drawText(windowWidth / 2.0f - hintW / 2.0f, 32.0f, exitHint, 0.6f, 0.6f, 0.6f, 0.7f, 1.5f);
+        }
+
+        // Crosshair
+        float chX = windowWidth / 2.0f;
+        float chY = windowHeight / 2.0f;
+        float chSize = 12.0f;
+        float chThick = 2.0f;
+        batchRect(chX - chSize, chY - chThick / 2, chSize * 2, chThick, 1.0f, 1.0f, 1.0f, 0.5f);
+        batchRect(chX - chThick / 2, chY - chSize, chThick, chSize * 2, 1.0f, 1.0f, 1.0f, 0.5f);
     }
 
     // Find nearest docked ship
@@ -596,11 +750,13 @@ void Renderer::endScreenSpace() {
     // Flush any pending screen-space batch
     flushBatch();
 
+    float halfW = (windowWidth / 2.0f) / zoom;
+    float halfH = (windowHeight / 2.0f) / zoom;
     glm::mat4 proj = glm::ortho(
-        cameraX - windowWidth / 2.0f,
-        cameraX + windowWidth / 2.0f,
-        cameraY + windowHeight / 2.0f,
-        cameraY - windowHeight / 2.0f,
+        cameraX - halfW,
+        cameraX + halfW,
+        cameraY + halfH,
+        cameraY - halfH,
         -1.0f, 1.0f
     );
     glUseProgram(shaderProgram);
@@ -897,8 +1053,65 @@ glm::vec4 Renderer::getCellTypeColor(CellType type) {
         case CellType::STORAGE:        return {0.55f, 0.6f, 0.55f, 1.0f};
         case CellType::AIRLOCK:        return {0.5f, 0.55f, 0.6f, 1.0f};
         case CellType::SPAWN_POINT:    return {0.6f, 0.6f, 0.65f, 1.0f};
+        case CellType::LANDING_PAD:    return {0.5f, 0.55f, 0.65f, 1.0f};
+        case CellType::HANGAR_DOOR:    return {0.45f, 0.45f, 0.55f, 1.0f};
+        case CellType::REFINERY:       return {0.7f, 0.45f, 0.2f, 1.0f};
+        case CellType::TURRET_BASE:    return {0.25f, 0.25f, 0.3f, 1.0f};
         default:                        return {0.2f, 0.2f, 0.25f, 1.0f};
     }
+}
+
+// --- Text rendering wrappers ---
+
+void Renderer::drawText(float x, float y, const std::string& text,
+                         float r, float g, float b, float a, float scale) {
+    font.beginText(windowWidth, windowHeight);
+    font.drawText(x, y, text, r, g, b, a, scale);
+    font.endText();
+    // Restore batch shader state
+    glUseProgram(batchShaderProgram);
+}
+
+float Renderer::measureText(const std::string& text, float scale) const {
+    return font.measureText(text, scale);
+}
+
+float Renderer::getTextHeight(float scale) const {
+    return font.getCharHeight(scale);
+}
+
+void Renderer::renderTooltip(const std::string& title, const std::string& description) {
+    if (title.empty() && description.empty()) return;
+
+    float scale = 2.0f;
+    float padding = 10.0f;
+    float lineHeight = getTextHeight(scale) + 4.0f;
+
+    float titleW = measureText(title, scale);
+    float descW = measureText(description, scale);
+    float boxW = (std::max)(titleW, descW) + padding * 2.0f;
+    float boxH = padding * 2.0f + lineHeight;
+    if (!description.empty()) boxH += lineHeight;
+
+    // Position in bottom-right corner
+    float boxX = windowWidth - boxW - 20.0f;
+    float boxY = windowHeight - boxH - 20.0f;
+
+    // Background
+    drawUIRect(boxX, boxY, boxW, boxH, 0.1f, 0.1f, 0.15f, 0.85f);
+    drawUIOutline(boxX, boxY, boxW, boxH, 2.0f, 0.4f, 0.4f, 0.5f, 0.9f);
+
+    // Title text
+    font.beginText(windowWidth, windowHeight);
+    font.drawText(boxX + padding, boxY + padding, title, 1.0f, 1.0f, 0.7f, 1.0f, scale);
+
+    // Description text
+    if (!description.empty()) {
+        font.drawText(boxX + padding, boxY + padding + lineHeight,
+                      description, 0.7f, 0.7f, 0.75f, 1.0f, scale);
+    }
+    font.endText();
+    glUseProgram(batchShaderProgram);
 }
 
 } // namespace ssm

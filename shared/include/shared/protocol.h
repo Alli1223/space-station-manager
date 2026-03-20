@@ -15,6 +15,8 @@ enum class MessageType : uint8_t {
     MSG_CELL_EDIT = 4,
     MSG_CARGO_PLACE = 5,
     MSG_TETHER_TOGGLE = 6,
+    MSG_TURRET_AIM = 7,
+    MSG_TURRET_EXIT = 8,
 
     // Server -> Client
     MSG_WELCOME = 10,
@@ -32,6 +34,10 @@ enum class EventType : uint8_t {
     CARGO_PICKUP = 4,
     CARGO_DROP = 5,
     SHIP_ANGRY_DEPART = 6,
+    TURRET_ENTERED = 7,
+    TURRET_EXITED = 8,
+    WALL_DESTROYED = 9,
+    ENEMY_DESTROYED = 10,
 };
 
 // Encode a message with length prefix: [uint16 length][uint8 type][payload]
@@ -49,6 +55,8 @@ ByteBuffer buildInputMessage(float dx, float dy, bool interact, bool sprint = fa
 ByteBuffer buildCellEditMessage(int16_t gridX, int16_t gridY, CellType cellType);
 ByteBuffer buildCargoPlaceMessage(float targetX, float targetY);
 ByteBuffer buildTetherToggleMessage(uint32_t cargoId);
+ByteBuffer buildTurretAimMessage(float angle, bool firing);
+ByteBuffer buildTurretExitMessage();
 
 // Server -> Client
 ByteBuffer buildWelcomeMessage(uint32_t playerId, const std::vector<uint8_t>& mapData,

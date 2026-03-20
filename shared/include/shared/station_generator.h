@@ -8,13 +8,14 @@
 namespace ssm {
 
 enum class RoomType {
-    DOCKING_BAY,
+    LANDING_BAY,
     STORAGE,
     COMMAND,
     MESS_HALL,
     ENGINEERING,
     MEDBAY,
     CREW_QUARTERS,
+    REFINERY,
 };
 
 struct RoomDef {
@@ -61,8 +62,8 @@ private:
     void placeRoomWalls(const PlacedRoom& room);
     bool tryPlaceRoom(const RoomDef& def, int belowY);
 
-    // Docking bay (special layout)
-    void placeDockingBay();
+    // Landing bay (special layout with hangar door + landing pads)
+    void placeLandingBay();
 
     // Room furnishing
     void furnishRoom(const PlacedRoom& room);
@@ -72,6 +73,7 @@ private:
     void furnishEngineering(const PlacedRoom& room);
     void furnishMedbay(const PlacedRoom& room);
     void furnishCrewQuarters(const PlacedRoom& room);
+    void furnishRefinery(const PlacedRoom& room);
 
     // Corridor connection
     void connectAllRooms();
@@ -81,6 +83,9 @@ private:
 
     // Door placement pass
     void placeDoors();
+
+    // Turret placement on exterior walls
+    void placeTurrets();
 
     // Connectivity validation
     bool validateConnectivity();

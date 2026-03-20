@@ -189,8 +189,8 @@ void GameClient::run() {
             }
         }
 
-        // Tether toggle: when NOT carrying, NOT in edit mode, left-click on on-ground cargo
-        if (!editMode && !uiConsumed && carryCheckPlayer && !carryCheckPlayer->isCarrying() && mapReceived) {
+        // Tether toggle: when NOT carrying, NOT in edit mode, NOT in turret, left-click on on-ground cargo
+        if (!editMode && !uiConsumed && carryCheckPlayer && !carryCheckPlayer->isCarrying() && !carryCheckPlayer->isInTurret() && mapReceived) {
             if (input.wasLeftClickPressed()) {
                 float worldX, worldY;
                 screenToWorld(input.getMouseX(), input.getMouseY(), worldX, worldY);
@@ -215,15 +215,33 @@ void GameClient::run() {
             std::cout << "[CLIENT] E pressed — queuing interact" << std::endl;
         }
 
-        // Send input to server every tick (always send, even 0,0, so server clears movement)
+        // Handle turret exit immediately when E is pressed
+        Player* turretCheckPlayer = findLocalPlayer();
+        if (pendingInteract && turretCheckPlayer && turretCheckPlayer->isInTurret()) {
+            network.sendTurretExit();
+            pendingInteract = false;
+            std::cout << "[CLIENT] Exiting turret" << std::endl;
+        }
+
+        // Send input to server every tick
         auto now = std::chrono::steady_clock::now();
         float timeSinceInput = std::chrono::duration<float>(now - lastInputSend).count();
         if (timeSinceInput >= SERVER_TICK_INTERVAL) {
-            if (pendingInteract) {
-                std::cout << "[CLIENT] Sending interact to server" << std::endl;
+            if (turretCheckPlayer && turretCheckPlayer->isInTurret()) {
+                // Turret mode: send aim angle and firing state
+                float worldMX, worldMY;
+                screenToWorld(input.getMouseX(), input.getMouseY(), worldMX, worldMY);
+                float pcx = turretCheckPlayer->x + turretCheckPlayer->width / 2.0f;
+                float pcy = turretCheckPlayer->y + turretCheckPlayer->height / 2.0f;
+                float aimAngle = std::atan2(worldMY - pcy, worldMX - pcx);
+                network.sendTurretAim(aimAngle, input.isLeftMouseDown());
+            } else {
+                if (pendingInteract) {
+                    std::cout << "[CLIENT] Sending interact to server" << std::endl;
+                }
+                network.sendInput(input.getMoveX(), input.getMoveY(), pendingInteract, input.isSprinting());
+                pendingInteract = false;
             }
-            network.sendInput(input.getMoveX(), input.getMoveY(), pendingInteract, input.isSprinting());
-            pendingInteract = false;
             lastInputSend = now;
         }
 
@@ -272,6 +290,14 @@ void GameClient::run() {
             }
 
             renderer.setCamera(cameraPosX, cameraPosY);
+
+            // Smooth zoom transition for turret mode
+            float targetZoom = localPlayer->isInTurret() ? 0.4f : 1.0f;
+            float currentZoom = renderer.getZoom();
+            constexpr float ZOOM_SMOOTHING = 4.0f;
+            float zoomLerp = 1.0f - std::exp(-ZOOM_SMOOTHING * frameDt);
+            float newZoom = currentZoom + (targetZoom - currentZoom) * zoomLerp;
+            renderer.setZoom(newZoom);
         }
 
         // --- Render ---
@@ -295,21 +321,66 @@ void GameClient::run() {
         renderer.renderObjects(gameObjects);
         renderer.renderTetherRopes(gameObjects);
 
-        // Hover tooltip: check if mouse is over an on-ground cargo item
+        // Hover tooltip: check what the mouse is over
+        std::string tooltipTitle;
+        std::string tooltipDesc;
         CargoType hoveredCargoType = CargoType::NONE;
         if (!editMode && mapReceived) {
             float hoverWorldX, hoverWorldY;
             screenToWorld(input.getMouseX(), input.getMouseY(), hoverWorldX, hoverWorldY);
             for (auto* obj : gameObjects) {
-                if (obj->type == GameObjectType::CARGO && obj->active) {
+                if (!obj->active) continue;
+                // AABB hit test
+                if (hoverWorldX < obj->x || hoverWorldX > obj->x + obj->width ||
+                    hoverWorldY < obj->y || hoverWorldY > obj->y + obj->height) continue;
+
+                if (obj->type == GameObjectType::CARGO) {
                     auto* cargo = static_cast<const Cargo*>(obj);
                     if (!cargo->isOnGround()) continue;
-                    // AABB hit test
-                    if (hoverWorldX >= cargo->x && hoverWorldX <= cargo->x + cargo->width &&
-                        hoverWorldY >= cargo->y && hoverWorldY <= cargo->y + cargo->height) {
-                        hoveredCargoType = cargo->cargoType;
-                        break;
+                    hoveredCargoType = cargo->cargoType;
+                    switch (cargo->cargoType) {
+                        case CargoType::FUEL:     tooltipTitle = "Fuel"; tooltipDesc = "Powers ship engines"; break;
+                        case CargoType::FOOD:     tooltipTitle = "Food"; tooltipDesc = "Feeds ship crew"; break;
+                        case CargoType::METAL:    tooltipTitle = "Metal"; tooltipDesc = "Used for turret ammo and building"; break;
+                        case CargoType::ORE:      tooltipTitle = "Ore"; tooltipDesc = "Raw material, refine for credits"; break;
+                        case CargoType::CRYSTALS: tooltipTitle = "Crystals"; tooltipDesc = "Valuable trade commodity"; break;
+                        case CargoType::PLASMA:   tooltipTitle = "Plasma"; tooltipDesc = "High-energy resource"; break;
+                        default: break;
                     }
+                    break;
+                } else if (obj->type == GameObjectType::SHIP) {
+                    auto* ship = static_cast<const Ship*>(obj);
+                    switch (ship->shipClass) {
+                        case ShipClass::SMALL:  tooltipTitle = "Small Trader"; break;
+                        case ShipClass::MEDIUM: tooltipTitle = "Medium Freighter"; break;
+                        case ShipClass::LARGE:  tooltipTitle = "Large Hauler"; break;
+                    }
+                    switch (ship->state) {
+                        case ShipState::APPROACHING:       tooltipDesc = "Approaching station"; break;
+                        case ShipState::DOCKING:           tooltipDesc = "Landing..."; break;
+                        case ShipState::UNLOADING:         tooltipDesc = "Unloading cargo"; break;
+                        case ShipState::WAITING_RESUPPLY:  tooltipDesc = "Needs fuel and food"; break;
+                        case ShipState::DEPARTING:         tooltipDesc = "Departing"; break;
+                        default: break;
+                    }
+                    break;
+                } else if (obj->type == GameObjectType::TURRET) {
+                    auto* turret = static_cast<const Turret*>(obj);
+                    if (turret->turretType == TurretType::ENERGY) {
+                        tooltipTitle = "Energy Turret";
+                        tooltipDesc = "High damage, short range, unlimited ammo";
+                    } else {
+                        tooltipTitle = "Kinetic Turret";
+                        tooltipDesc = "Fast fire, long range, needs Metal ammo";
+                    }
+                    if (turret->operatorId != 0) tooltipDesc += " [Manned]";
+                    break;
+                } else if (obj->type == GameObjectType::ENEMY_SHIP) {
+                    auto* enemy = static_cast<const EnemyShip*>(obj);
+                    tooltipTitle = "Enemy Ship";
+                    int hpPct = static_cast<int>(enemy->health / enemy->maxHealth * 100.0f);
+                    tooltipDesc = "Hostile - HP: " + std::to_string(hpPct) + "%";
+                    break;
                 }
             }
         }
@@ -375,10 +446,15 @@ void GameClient::run() {
             renderer.renderHUD(localPlayer, gameObjects, stationMoney);
         }
 
-        // Render cargo tooltip in screen space if hovering over cargo
-        if (hoveredCargoType != CargoType::NONE) {
+        // Render tooltip in screen space if hovering over something
+        if (!tooltipTitle.empty()) {
             renderer.beginScreenSpace();
-            renderer.renderCargoTooltip(input.getMouseX(), input.getMouseY(), hoveredCargoType);
+            // Keep the small colored cargo indicator near the mouse
+            if (hoveredCargoType != CargoType::NONE) {
+                renderer.renderCargoTooltip(input.getMouseX(), input.getMouseY(), hoveredCargoType);
+            }
+            // Text tooltip in bottom-right corner
+            renderer.renderTooltip(tooltipTitle, tooltipDesc);
             renderer.endScreenSpace();
         }
 
@@ -388,14 +464,15 @@ void GameClient::run() {
         // Draw "EDIT" label on the edit button in screen space
         if (editButton) {
             renderer.beginScreenSpace();
-            // Small colored indicator inside button
-            float indicatorSize = 8.0f;
-            float ix = editButton->x + editButton->width / 2.0f - indicatorSize / 2.0f;
-            float iy = editButton->y + editButton->height / 2.0f - indicatorSize / 2.0f;
+            float textScale = 1.5f;
+            float textW = renderer.measureText("EDIT", textScale);
+            float textH = renderer.getTextHeight(textScale);
+            float tx = editButton->x + (editButton->width - textW) / 2.0f;
+            float ty = editButton->y + (editButton->height - textH) / 2.0f;
             if (editMode) {
-                renderer.drawUIRect(ix, iy, indicatorSize, indicatorSize, 0.2f, 0.9f, 0.3f);
+                renderer.drawText(tx, ty, "EDIT", 0.2f, 0.9f, 0.3f, 1.0f, textScale);
             } else {
-                renderer.drawUIRect(ix, iy, indicatorSize, indicatorSize, 0.7f, 0.7f, 0.7f);
+                renderer.drawText(tx, ty, "EDIT", 0.8f, 0.8f, 0.8f, 1.0f, textScale);
             }
             renderer.endScreenSpace();
         }
@@ -432,15 +509,17 @@ void GameClient::toggleEditMode() {
 }
 
 void GameClient::screenToGrid(float screenX, float screenY, int& gridX, int& gridY) {
-    float worldX = renderer.getCameraX() - renderer.getWindowWidth() / 2.0f + screenX;
-    float worldY = renderer.getCameraY() - renderer.getWindowHeight() / 2.0f + screenY;
+    float z = renderer.getZoom();
+    float worldX = renderer.getCameraX() + (screenX - renderer.getWindowWidth() / 2.0f) / z;
+    float worldY = renderer.getCameraY() + (screenY - renderer.getWindowHeight() / 2.0f) / z;
     gridX = static_cast<int>(std::floor(worldX / CELL_SIZE));
     gridY = static_cast<int>(std::floor(worldY / CELL_SIZE));
 }
 
 void GameClient::screenToWorld(float screenX, float screenY, float& worldX, float& worldY) {
-    worldX = renderer.getCameraX() - renderer.getWindowWidth() / 2.0f + screenX;
-    worldY = renderer.getCameraY() - renderer.getWindowHeight() / 2.0f + screenY;
+    float z = renderer.getZoom();
+    worldX = renderer.getCameraX() + (screenX - renderer.getWindowWidth() / 2.0f) / z;
+    worldY = renderer.getCameraY() + (screenY - renderer.getWindowHeight() / 2.0f) / z;
 }
 
 } // namespace ssm

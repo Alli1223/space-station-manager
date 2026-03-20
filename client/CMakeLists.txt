@@ -28,6 +28,7 @@ FetchContent_MakeAvailable(glm)
 add_executable(station_client
     src/main.cpp
     src/renderer.cpp
+    src/bitmap_font.cpp
     src/network_client.cpp
     src/input_handler.cpp
     src/game_client.cpp
